@@ -6,6 +6,8 @@ import {
   Length,
   validateSync,
   IsOptional,
+  IsBoolean,
+  Min,
 } from 'class-validator';
 
 enum Environment {
@@ -66,6 +68,27 @@ class EnvironmentVariables {
   @IsString()
   @Length(64, 64, { message: 'MASTER_ENCRYPTION_KEY باید دقیقا 64 کاراکتر hex (32 بایت) باشد' })
   MASTER_ENCRYPTION_KEY: string;
+
+  @IsOptional() @IsBoolean()
+  MARKET_SCANNER_ENABLED?: boolean;
+
+  @IsOptional() @IsNumber() @Min(1)
+  MARKET_SCANNER_TTL_SECONDS?: number;
+
+  @IsOptional() @IsNumber() @Min(1)
+  MARKET_SCANNER_FRESHNESS_MS?: number;
+
+  @IsOptional() @IsNumber()
+  MARKET_SCANNER_MIN_SPREAD_PERCENT?: number;
+
+  @IsOptional() @IsNumber() @Min(1)
+  MARKET_SCANNER_MAX_RESULTS?: number;
+
+  @IsOptional() @IsNumber() @Min(0)
+  MARKET_SCANNER_DEBOUNCE_MS?: number;
+
+  @IsOptional() @IsString()
+  MARKET_SCANNER_EXCHANGES?: string;
 }
 
 export function validateEnv(config: Record<string, unknown>) {

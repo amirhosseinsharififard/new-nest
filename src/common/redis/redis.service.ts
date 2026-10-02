@@ -27,6 +27,18 @@ export class RedisService {
     await this.client.del(key);
   }
 
+  /** Incremental iteration only; callers must never use Redis KEYS on market namespaces. */
+  async scan(match: string, count = 100): Promise<string[]> {
+    let cursor = '0';
+    const keys: string[] = [];
+    do {
+      const [next, batch] = await this.client.scan(cursor, 'MATCH', match, 'COUNT', count);
+      cursor = next;
+      keys.push(...batch);
+    } while (cursor !== '0');
+    return keys;
+  }
+
   /**
    * Distributed Lock ساده با NX (فقط اگر کلید وجود نداشت ست میشه).
    * در فاز ۶ برای جلوگیری از اجرای هم‌زمان دو درخواست باز کردن پوزیشن یکسان لازم میشه.

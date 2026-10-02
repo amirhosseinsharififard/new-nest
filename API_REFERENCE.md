@@ -258,6 +258,40 @@ Authorization: Bearer <accessToken>
   "timestamp": "2026-01-01T00:00:00.000Z"
 }
 ```
+
+---
+
+## Public Market Scanner
+
+تمام endpointهای این بخش JWT می‌خواهند، ولی خود scanner فقط از endpointهای عمومی بازار استفاده می‌کند و هرگز API key یا credential اکانت را نمی‌خواند. این سرویس فقط **signal** می‌سازد و هیچ orderی باز نمی‌کند.
+
+### `POST /market/scanner/start` و `POST /market/scanner/stop`
+شروع/توقف اتصال‌های public WebSocket. پاسخ هر دو endpoint وضعیت فعلی است:
+```json
+{ "running": true, "tickerCount": 412, "exchanges": [{ "exchangeId": "binance", "healthy": true }] }
+```
+
+### `GET /market/scanner/status` و `GET /market/scanner/symbols`
+اولی وضعیت اتصال و تعداد tickerهای cache‌شده را می‌دهد؛ دومی فقط symbolهای تازه و exchangeهای موجود را برمی‌گرداند:
+```json
+[{ "normalizedSymbol": "BTC-USDT-PERP", "exchanges": ["binance", "bybit", "okx"] }]
+```
+
+### `GET /market/scanner/tickers`
+آخرین **bid/ask تازه**‌ای که scanner از WebSocket دریافت کرده را برای مشاهدهٔ مستقیم بازار برمی‌گرداند. Queryها: `exchange` (مثلاً `binance` یا `hyperliquid`)، `symbol` و `limit` (پیش‌فرض ۱۰، حداکثر ۱۰۰۰). این endpoint نیز JWT می‌خواهد و هیچ credentialی را نشان نمی‌دهد.
+
+نمونه: `GET /market/scanner/tickers?exchange=binance&limit=10`
+```json
+[{ "exchangeId":"binance", "normalizedSymbol":"BTC-USDT-PERP", "exchangeSymbol":"BTCUSDT", "bidPrice":60000, "askPrice":60000.1, "timestamp":1710000000000, "receivedAt":1710000000010, "quoteAsset":"USDT", "settlementAsset":"USDT", "marketType":"perpetual", "freshnessMs":10 }]
+```
+
+### `GET /market/scanner/opportunities`
+Queryهای اختیاری: `minSpreadPercent`، `limit` (۱ تا ۱۰۰)، `exchanges=binance,bybit` و `symbol=BTC`. نتیجه بر اساس `netSpreadPercent` نزولی مرتب است. محاسبه بعد از هر ticker update در همان event-loop turn انجام می‌شود (مگر این‌که `MARKET_SCANNER_DEBOUNCE_MS` عمداً بزرگ‌تر از صفر تنظیم شود):
+```json
+[{ "normalizedSymbol":"BTC-USDT-PERP", "quoteAsset":"USDT", "settlementAsset":"USDT", "buyExchange":"binance", "sellExchange":"bybit", "buyAsk":60000, "sellBid":60100, "grossSpreadPercent":0.1667, "estimatedFeesPercent":0.08, "netSpreadPercent":0.0867, "buyTickerTimestamp":1710000000000, "sellTickerTimestamp":1710000000010, "calculatedAt":1710000000020, "expiresAt":1710000005000, "freshnessMs":{"buy":20,"sell":10} }]
+```
+
+USDT و USDC عمداً گروه‌های جدا هستند (`BTC-USDT-PERP` در برابر `BTC-USDC-PERP`)؛ API نرخ تبدیل تقریبی اعمال نمی‌کند. بنابراین نتیجه صرفاً سیگنال قیمت است و هزینهٔ واقعی، latency، slippage، funding و امکان اجرا را تضمین نمی‌کند.
 اگر یکی از دو سرویس در دسترس نباشد، `status` برابر `"degraded"` و مقدار مربوطه `"down"` می‌شود (کد پاسخ همچنان `200` است — تفسیر وضعیت بر عهده کلاینت/مانیتورینگ است).
 
 ---

@@ -178,6 +178,14 @@ arbitrage-bot/
 
 ---
 
+## Market Scanner عمومی
+
+`src/core/market-data/public-market-data.interface.ts` قرارداد جداگانهٔ market data عمومی را نگه می‌دارد و هیچ credential حسابی در آن وجود ندارد. `src/modules/market-data/public-market-data.adapters.ts` WebSocketهای public Binance Futures، Bybit Linear، OKX SWAP و Hyperliquid را با reconnect پیاده می‌کند؛ Bybit و Hyperliquid symbol/coin را با REST عمومی کشف و subscriptionها را صف‌بندی می‌کنند.
+
+`market-scanner.service.ts` tickerهای معتبر را با TTL در Redis و در یک index in-memory قابل‌بازسازی نگه می‌دارد، و به‌صورت پیش‌فرض (`MARKET_SCANNER_DEBOUNCE_MS=0`) همان symbol را در همان event-loop turn هر ticker محاسبه می‌کند؛ debounce فقط یک تنظیم اختیاری برای backpressure است. `GET /market/scanner/tickers` آخرین tickerهای تازه را برای dashboard/API نمایش می‌دهد. سرویس به `PositionExecutorService` وابسته نیست. نرمال‌سازی `BASE-QUOTE-PERP` است؛ USDT و USDC عمداً comparison key متفاوت دارند و هیچ تبدیل FX تقریبی انجام نمی‌شود. Hyperliquid از `l2Book` استفاده می‌کند، چون `allMids` bid/ask اجرایی ندارد.
+
+Scanner یک signal است، نه تضمین سود یا اجرا: stale price، fee tier واقعی، latency، slippage و funding می‌توانند نتیجهٔ واقعی را تغییر دهند.
+
 ## نقشه فازهای آینده (کجا اضافه می‌شوند)
 
 | فاز | ماژول جدید | مسیر پیشنهادی |

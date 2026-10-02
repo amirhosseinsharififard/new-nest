@@ -10,6 +10,7 @@ import { RedisModule } from '../../common/redis/redis.module';
 import { ExchangeModule } from '../../core/exchange/exchange.module';
 import { StrategiesModule } from '../strategies/strategies.module';
 import { ExchangeAccountsModule } from '../exchange-accounts/exchange-accounts.module';
+import { MarketScannerService } from './market-scanner.service';
 
 @Module({
   imports: [
@@ -20,7 +21,7 @@ import { ExchangeAccountsModule } from '../exchange-accounts/exchange-accounts.m
     ExchangeAccountsModule,
   ],
   controllers: [MarketDataController],
-  providers: [SpreadCalculatorService, PriceAggregatorService, StrategyPriceWatcherService],
-  exports: [SpreadCalculatorService, PriceAggregatorService],
+  providers: [SpreadCalculatorService, PriceAggregatorService, StrategyPriceWatcherService, MarketScannerService],
+  exports: [SpreadCalculatorService, PriceAggregatorService, MarketScannerService],
 })
 export class MarketDataModule {}
