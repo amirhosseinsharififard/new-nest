@@ -38,6 +38,20 @@ export class OkxWsManager {
     }
   }
 
+   disconnectTicker(instId: string): void {
+    if (!this.tickerCallbacks.delete(instId)) return;
+
+    if (this.tickerCallbacks.size === 0) {
+      this.publicWs?.disconnect();
+      this.publicWs = null;
+      return;
+    }
+
+    this.publicWs?.send(
+      JSON.stringify({ op: 'unsubscribe', args: [{ channel: 'tickers', instId }] }),
+    );
+  }
+
   private subscribeAllTickers(): void {
     const args = Array.from(this.tickerCallbacks.keys()).map((instId) => ({
       channel: 'tickers',

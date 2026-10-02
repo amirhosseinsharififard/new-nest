@@ -63,9 +63,11 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   unsubscribeTicker(symbol: string): void {
-    // TODO: پیاده‌سازی کامل نیازمند مدیریت لیست Symbol های فعال در ReconnectingWsClient است
-    this.logger.warn('unsubscribeTicker هنوز به‌طور کامل پیاده‌سازی نشده');
+    this.wsManager.disconnectTicker(symbol).catch((err) => {
+      this.logger.error(`خطا در لغو اشتراک Ticker Stream: ${err.message}`);
+    });
   }
+
 
   subscribePositionUpdates(
     accountId: string,

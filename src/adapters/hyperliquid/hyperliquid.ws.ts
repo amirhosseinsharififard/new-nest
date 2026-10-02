@@ -30,8 +30,7 @@ export class HyperliquidWsManager {
   }
 
   private resubscribeAll(): void {
-    for (const coin of this.tickerCallbacks.keys()) {
-      this.ws?.send(
+    if (this.tickerCallbacks.size > 0) {      this.ws?.send(
         JSON.stringify({ method: 'subscribe', subscription: { type: 'allMids' } }),
       );
     }
@@ -51,6 +50,24 @@ export class HyperliquidWsManager {
     // allMids یک استریم واحد برای همه Coin هاست، پس فقط یک‌بار subscribe لازمه
     this.ws?.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'allMids' } }));
   }
+
+  disconnectTicker(coin: string): void {
+    if (!this.tickerCallbacks.delete(coin)) return;
+
+    // allMids یک subscription مشترک برای تمام coinها است؛ فقط بعد از حذف
+    // آخرین callback می‌توان آن را لغو کرد.
+    if (this.tickerCallbacks.size > 0) return;
+
+    this.ws?.send(
+      JSON.stringify({ method: 'unsubscribe', subscription: { type: 'allMids' } }),
+    );
+
+    if (!this.walletAddress) {
+      this.ws?.disconnect();
+      this.ws = null;
+    }
+  }
+
 
   private handleMessage(raw: any): void {
     try {

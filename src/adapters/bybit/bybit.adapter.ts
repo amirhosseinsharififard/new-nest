@@ -58,9 +58,10 @@ export class BybitAdapter implements IExchangeAdapter {
     });
   }
 
-  unsubscribeTicker(symbol: string): void {
-    this.logger.warn('unsubscribeTicker هنوز کامل پیاده‌سازی نشده');
+ unsubscribeTicker(symbol: string): void {
+    this.wsManager.disconnectTicker(toBybitSymbol(symbol));
   }
+
 
   subscribePositionUpdates(
     accountId: string,

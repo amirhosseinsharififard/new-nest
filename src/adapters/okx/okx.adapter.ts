@@ -63,8 +63,7 @@ export class OkxAdapter implements IExchangeAdapter {
   }
 
   unsubscribeTicker(symbol: string): void {
-    this.logger.warn('unsubscribeTicker هنوز کامل پیاده‌سازی نشده');
-  }
+    this.wsManager.disconnectTicker(toOkxSymbol(symbol));  }
 
   subscribePositionUpdates(
     accountId: string,

@@ -36,6 +36,21 @@ export class BybitWsManager {
     }
   }
 
+
+  disconnectTicker(symbol: string): void {
+    if (!this.tickerCallbacks.delete(symbol)) return;
+
+    if (this.tickerCallbacks.size === 0) {
+      this.publicWs?.disconnect();
+      this.publicWs = null;
+      return;
+    }
+
+    this.publicWs?.send(
+      JSON.stringify({ op: 'unsubscribe', args: [`tickers.${symbol}`] }),
+    );
+  }
+
   private subscribeAllTickers(): void {
     const args = Array.from(this.tickerCallbacks.keys()).map((s) => `tickers.${s}`);
     this.publicWs?.send(JSON.stringify({ op: 'subscribe', args }));

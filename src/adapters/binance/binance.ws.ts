@@ -30,11 +30,24 @@ export class BinanceWsManager {
     const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
     this.tickerCallbacks.set(binanceSymbol, cb);
 
-    if (this.tickerWs) {
-      // برای سادگی فاز ۲: هر Symbol جدید یعنی Reconnect با استریم ترکیبی جدید.
-      // در Production بهتره از Combined Stream برای همه Symbolها همزمان استفاده بشه.
-      this.tickerWs.disconnect();
-    }
+     await this.reconnectTickerStream();
+  }
+
+  async disconnectTicker(symbol: string): Promise<void> {
+    const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
+    if (!this.tickerCallbacks.delete(binanceSymbol)) return;
+
+    await this.reconnectTickerStream();
+  }
+
+  private async reconnectTickerStream(): Promise<void> {
+    this.tickerWs?.disconnect();
+    this.tickerWs = null;
+
+    // Combined Stream بین نمادها مشترک است؛ بعد از هر تغییر در مجموعهٔ نمادها
+    // باید با URL جدید وصل شود. اگر نمادی باقی نمانده، اتصال عمومی را هم می‌بندیم.
+    if (this.tickerCallbacks.size === 0) return;
+
 
     const streams = Array.from(this.tickerCallbacks.keys())
       .map((s) => `${s}@bookTicker`)

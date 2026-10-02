@@ -17,7 +17,7 @@ export class User {
   @Column()
   passwordHash: string; // argon2 hash، هرگز plain text
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   twoFactorSecret: string | null; // برای otplib، خودش هم باید در سطح دیتابیس محافظت بشه
 
   @Column({ default: false })

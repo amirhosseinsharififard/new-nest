@@ -16,7 +16,8 @@ import { SpreadCalculatorService } from './spread-calculator.service';
 @Injectable()
 export class PriceAggregatorService {
   private readonly logger = new Logger(PriceAggregatorService.name);
-  // برای جلوگیری از subscribe تکراری روی یک (exchangeId, symbol)
+// برای جلوگیری از subscribe تکراری روی یک (exchangeId, accountId, symbol).
+  // هر Account می‌تواند اتصال WebSocket و credential مستقل داشته باشد.
   private readonly activeSubscriptions = new Set<string>();
 
   constructor(
@@ -29,8 +30,8 @@ export class PriceAggregatorService {
    * هر بار قیمت جدید بیاد، در Redis Cache می‌شه.
    */
   watchSymbol(config: ExchangeAccountConfig, symbol: string): void {
-    const subscriptionKey = `${config.exchangeId}:${symbol}`;
-    if (this.activeSubscriptions.has(subscriptionKey)) {
+    const subscriptionKey = this.getSubscriptionKey(config, symbol);
+        if (this.activeSubscriptions.has(subscriptionKey)) {
       this.logger.debug(`قبلا در حال گوش دادن به ${subscriptionKey} هستیم`);
       return;
     }
@@ -47,6 +48,24 @@ export class PriceAggregatorService {
   }
 
   isWatching(exchangeId: string, symbol: string): boolean {
-    return this.activeSubscriptions.has(`${exchangeId}:${symbol}`);
+     return Array.from(this.activeSubscriptions).some((key) =>
+      key.startsWith(`${exchangeId}:`) && key.endsWith(`:${symbol}`),
+    );
   }
+
+  /** توقف دریافت قیمت پس از حذف یا غیرفعال‌شدن یک strategy. */
+  unwatchSymbol(config: ExchangeAccountConfig, symbol: string): void {
+    const subscriptionKey = this.getSubscriptionKey(config, symbol);
+    if (!this.activeSubscriptions.delete(subscriptionKey)) return;
+
+    const adapter = this.registry.getInstance(config);
+    adapter.unsubscribeTicker(symbol);
+    this.logger.log(`توقف گوش دادن به قیمت ${symbol} روی ${config.exchangeId}`);
+  }
+
+  private getSubscriptionKey(config: ExchangeAccountConfig, symbol: string): string {
+    return `${config.exchangeId}:${config.accountId}:${symbol}`;
+  }
+
+
 }
