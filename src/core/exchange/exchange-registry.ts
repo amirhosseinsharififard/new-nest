@@ -57,11 +57,30 @@ export class ExchangeRegistry {
    * چون API Key متفاوت و اتصال WebSocket جدا نیاز داره.
    */
   getInstance(config: ExchangeAccountConfig): IExchangeAdapter {
-    const key = `${config.exchangeId}:${config.accountId}`;
-    const existing = this.activeInstances.get(key);
-    if (existing) return existing;
+  const key = `${config.exchangeId}:${config.accountId}`;
+  const existing = this.activeInstances.get(key);
 
-    const factory = this.factories.get(config.exchangeId);
+  console.log('========== GET INSTANCE ==========');
+  console.log('exchangeId:', config.exchangeId);
+  console.log('accountId:', config.accountId);
+  console.log('key:', key);
+  console.log('existing:', existing);
+
+  if (existing) {
+    console.log('✅ RETURN EXISTING ADAPTER');
+    return existing;
+  }
+
+  const factory = this.factories.get(config.exchangeId);
+
+  console.log('factory:', factory);
+
+  if (!factory) {
+    throw new Error(
+      `صرافی "${config.exchangeId}" ثبت نشده. ابتدا Adapter آن را register کنید.`,
+    );
+  }
+
     if (!factory) {
       throw new Error(
         `صرافی "${config.exchangeId}" ثبت نشده. ابتدا Adapter آن را register کنید.`,

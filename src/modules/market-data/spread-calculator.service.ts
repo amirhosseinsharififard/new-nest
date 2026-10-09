@@ -33,24 +33,39 @@ export class SpreadCalculatorService {
   ) {}
 
   /** ذخیره آخرین قیمت دریافتی از WebSocket یک صرافی (توسط PriceAggregatorService صدا زده میشه) */
-  async cacheTicker(exchangeSlug: string, ticker: TickerData): Promise<void> {
-    const key = buildPriceCacheKey(exchangeSlug, ticker.symbol);
-    await this.redisService.set(key, JSON.stringify(ticker), PRICE_CACHE_TTL_SECONDS);
+async cacheTicker(
+  exchangeSlug: string,
+  ticker: TickerData,
+): Promise<void> {
+  const key = buildPriceCacheKey(exchangeSlug, ticker.symbol);
 
-    // به‌جای اینکه OpportunityDetector منتظر Interval بعدی (تا ۵ ثانیه) بمونه،
-    // همین لحظه که قیمت جدید اومد، یک Event می‌فرستیم تا فوراً چک بشه.
-    this.eventEmitter.emit(TICKER_UPDATED_EVENT, {
-      exchangeSlug,
-      symbol: ticker.symbol,
-    } as TickerUpdatedPayload);
-  }
+  console.log('========== CACHE TICKER ==========');
+  console.log('KEY:', key);
+  console.log('TICKER:', ticker);
 
-  async getCachedTicker(exchangeSlug: string, symbol: string): Promise<TickerData | null> {
-    const key = buildPriceCacheKey(exchangeSlug, symbol);
-    const raw = await this.redisService.get(key);
-    return raw ? (JSON.parse(raw) as TickerData) : null;
-  }
+  await this.redisService.set(
+    key,
+    JSON.stringify(ticker),
+    PRICE_CACHE_TTL_SECONDS,
+  );
 
+  console.log('CACHE SAVED:', key);
+}
+
+ async getCachedTicker(
+  exchangeSlug: string,
+  symbol: string,
+): Promise<TickerData | null> {
+  const key = buildPriceCacheKey(exchangeSlug, symbol);
+
+  const raw = await this.redisService.get(key);
+
+  console.log('========== GET TICKER ==========');
+  console.log('KEY:', key);
+  console.log('RAW:', raw);
+
+  return raw ? (JSON.parse(raw) as TickerData) : null;
+}
   /**
    * محاسبه Spread زنده بین دو صرافی برای یک Symbol، با استفاده از
    * آخرین قیمت‌های Cache شده در Redis.

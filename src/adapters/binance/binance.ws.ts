@@ -21,17 +21,29 @@ export class BinanceWsManager {
   private tickerCallbacks = new Map<string, (data: TickerData) => void>();
   private positionCallback: ((data: PositionUpdate) => void) | null = null;
 
-  constructor(
-    private readonly restClient: BinanceRestClient,
-    private readonly wsBaseUrl = 'wss://fstream.binance.com',
-  ) {}
+ constructor(
+  private readonly restClient: BinanceRestClient | null,
+  private readonly wsBaseUrl = 'wss://fstream.binance.com',
+) {}
 
-  async connectTicker(symbol: string, cb: (data: TickerData) => void): Promise<void> {
-    const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
-    this.tickerCallbacks.set(binanceSymbol, cb);
+  async connectTicker(
+  symbol: string,
+  cb: (data: TickerData) => void,
+): Promise<void> {
+  this.logger.log(
+    `PUBLIC TICKER CONNECT -> ${symbol} -> ${this.wsBaseUrl}`,
+  );
 
-     await this.reconnectTickerStream();
-  }
+  const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
+
+  this.tickerCallbacks.set(binanceSymbol, cb);
+
+console.log('BEFORE reconnectTickerStream');
+
+await this.reconnectTickerStream();
+
+console.log('AFTER reconnectTickerStream');
+}
 
   async disconnectTicker(symbol: string): Promise<void> {
     const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
@@ -86,31 +98,41 @@ export class BinanceWsManager {
     }
   }
 
-  async connectUserDataStream(cb: (data: PositionUpdate) => void): Promise<void> {
-    this.positionCallback = cb;
-
-    const { listenKey } = await this.restClient.createListenKey();
-    this.listenKey = listenKey;
-
-    this.userDataWs = new ReconnectingWsClient({
-      url: `${this.wsBaseUrl}/ws/${listenKey}`,
-      exchangeId: 'binance-userdata',
-      onMessage: (raw) => this.handleUserDataMessage(raw),
-    });
-
-    await this.userDataWs.connect();
-
-    // هر 30 دقیقه یک‌بار Keep-alive، چون Binance بعد از 60 دقیقه بی‌فعالیت listenKey رو می‌بنده
-    this.keepAliveInterval = setInterval(
-      () => {
-        this.restClient.keepAliveListenKey().catch((err) => {
-          this.logger.error(`خطا در Keep-alive listenKey: ${err.message}`);
-        });
-      },
-      30 * 60 * 1000,
+ async connectUserDataStream(
+  cb: (data: PositionUpdate) => void,
+): Promise<void> {
+  if (!this.restClient) {
+    throw new Error(
+      'Binance User Data Stream requires authenticated REST client',
     );
   }
 
+  const restClient = this.restClient;
+
+  this.positionCallback = cb;
+
+  const { listenKey } = await restClient.createListenKey();
+  this.listenKey = listenKey;
+
+  this.userDataWs = new ReconnectingWsClient({
+    url: `${this.wsBaseUrl}/ws/${listenKey}`,
+    exchangeId: 'binance-userdata',
+    onMessage: (raw) => this.handleUserDataMessage(raw),
+  });
+
+  await this.userDataWs.connect();
+
+  this.keepAliveInterval = setInterval(
+    () => {
+      restClient.keepAliveListenKey().catch((err) => {
+        this.logger.error(
+          `خطا در Keep-alive listenKey: ${err.message}`,
+        );
+      });
+    },
+    30 * 60 * 1000,
+  );
+}
   private handleUserDataMessage(raw: any): void {
     try {
       const parsed = JSON.parse(raw.toString());
