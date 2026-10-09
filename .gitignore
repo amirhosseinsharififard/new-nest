@@ -42,3 +42,5 @@ Thumbs.db
 # Turborepo / Nx (if used in monorepo setup)
 .turbo
 dist/
+
+./change.md
