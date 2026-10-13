@@ -10,12 +10,6 @@ import {
 
 /**
  * قرارداد مشترکی که هر صرافی جدید باید پیاده‌سازی کنه.
- * Core Engine فقط با این Interface کار می‌کنه، هیچ‌وقت مستقیم با
- * کلاس Binance/Bybit/... سروکار نداره.
- *
- * نکته مهم: تمام متدها باید Error handling داخلی داشته باشن و
- * هیچ‌وقت Exception خام صرافی (مثلا axios error) رو مستقیم throw نکنن.
- * باید به یک نوع استاندارد (مثلا ExchangeError) تبدیل بشه.
  */
 export interface IExchangeAdapter {
   readonly exchangeId: string;
@@ -26,8 +20,16 @@ export interface IExchangeAdapter {
   isWebSocketHealthy(): boolean;
 
   // --- اشتراک در جریان داده ---
+
+  // متدهای تکی (حفظ شده برای سازگاری به عقب یا تست روی یک ارز خاص)
   subscribeTicker(symbol: string, cb: (data: TickerData) => void): void;
   unsubscribeTicker(symbol: string): void;
+
+  // 🌟 متدهای گروهی اضافه شده برای فاز مانیتورینگ وسیع 🌟
+  // صرافی‌ها باید در قالب یک پیام WebSocket واحد (مثلا یک آرایه از نمادها) سابسکرایب کنند
+  subscribeTickers(symbols: string[], cb: (data: TickerData) => void): void;
+  unsubscribeTickers(symbols: string[]): void;
+
   subscribePositionUpdates(
     accountId: string,
     cb: (data: PositionUpdate) => void,
@@ -46,8 +48,7 @@ export interface IExchangeAdapter {
 }
 
 /**
- * خطای استاندارد صرافی. هر Adapter باید خطاهای خودش رو
- * به این فرمت تبدیل کنه تا Core بتونه یکسان تصمیم بگیره.
+ * خطای استاندارد صرافی.
  */
 export class ExchangeError extends Error {
   constructor(
@@ -55,7 +56,7 @@ export class ExchangeError extends Error {
     public readonly code:
       | 'RATE_LIMIT'
       | 'INSUFFICIENT_BALANCE'
-      | 'NETWORK_TIMEOUT' // این کد خیلی مهمه: یعنی وضعیت واقعی نامشخصه
+      | 'NETWORK_TIMEOUT'
       | 'INVALID_PARAMS'
       | 'AUTH_ERROR'
       | 'UNKNOWN',

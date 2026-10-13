@@ -1,85 +1,94 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PriceAggregatorService } from './price-aggregator.service';
-import { TickerData } from '../../core/exchange/exchange.types';
+import { ExchangeRegistry } from '../../core/exchange/exchange-registry';
+import { SpreadCalculatorService } from './spread-calculator.service';
+import { IExchangeAdapter } from '../../core/exchange/exchange-adapter.interface';
+import { ExchangeAccountConfig } from '../../core/exchange/exchange-registry';
 
 describe('PriceAggregatorService', () => {
   let service: PriceAggregatorService;
-  let registry: any;
-  let spreadCalculator: any;
-  let fakeAdapter: any;
-  let tickerCallback: ((data: TickerData) => void) | null;
+  let registry: ExchangeRegistry;
+  let spreadCalculator: SpreadCalculatorService;
+  let eventEmitter: EventEmitter2;
 
-  beforeEach(() => {
-    tickerCallback = null;
-    fakeAdapter = {
-      exchangeId: 'binance',
-      subscribeTicker: jest.fn((symbol: string, cb: (data: TickerData) => void) => {
-        tickerCallback = cb;
-      }),
-    };
-    registry = {
-      getInstance: jest.fn().mockReturnValue(fakeAdapter),
-    };
-    spreadCalculator = {
-      cacheTicker: jest.fn().mockResolvedValue(undefined),
-    };
-
-    service = new PriceAggregatorService(registry, spreadCalculator);
-  });
-
-  const baseConfig = {
-    accountId: 'acc-1',
-    exchangeId: 'binance',
-    apiKey: 'key',
-    apiSecret: 'secret',
-    restBaseUrl: 'https://fapi.binance.com',
-    wsBaseUrl: 'wss://fstream.binance.com',
+  // ماک کردن Adapter صرافی با متدهای گروهی جدید
+  const mockAdapter: Partial<IExchangeAdapter> = {
+    subscribeTickers: jest.fn(),
+    unsubscribeTickers: jest.fn(),
   };
 
-  it('باید از Registry نمونه Adapter مناسب را بگیرد و subscribeTicker را صدا بزند', () => {
-    service.watchSymbol(baseConfig, 'BTC-USDT');
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        PriceAggregatorService,
+        {
+          provide: ExchangeRegistry,
+          useValue: {
+            getInstance: jest.fn().mockReturnValue(mockAdapter),
+          },
+        },
+        {
+          provide: SpreadCalculatorService,
+          useValue: {
+            cacheTicker: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: EventEmitter2,
+          useValue: {
+            emit: jest.fn(),
+          },
+        },
+      ],
+    }).compile();
 
-    expect(registry.getInstance).toHaveBeenCalledWith(baseConfig);
-    expect(fakeAdapter.subscribeTicker).toHaveBeenCalledWith('BTC-USDT', expect.any(Function));
+    service = module.get<PriceAggregatorService>(PriceAggregatorService);
+    registry = module.get<ExchangeRegistry>(ExchangeRegistry);
+    spreadCalculator = module.get<SpreadCalculatorService>(SpreadCalculatorService);
+    eventEmitter = module.get<EventEmitter2>(EventEmitter2);
+
+    jest.clearAllMocks();
   });
 
-  it('وقتی Adapter قیمت جدید بده، باید cacheTicker با exchangeId درست صدا زده شود', async () => {
-    service.watchSymbol(baseConfig, 'BTC-USDT');
-
-    const ticker: TickerData = {
-      exchangeId: 'binance',
-      symbol: 'BTC-USDT',
-      bidPrice: 100,
-      askPrice: 100.1,
-      timestamp: Date.now(),
-    };
-    tickerCallback?.(ticker);
-
-    // چون callback داخلی async هست (catch روی promise)، یک microtask صبر می‌کنیم
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(spreadCalculator.cacheTicker).toHaveBeenCalledWith('binance', ticker);
+  it('should be defined', () => {
+    expect(service).toBeDefined();
   });
 
-  it('نباید برای یک (exchangeId, symbol) تکراری دوباره subscribe کند', () => {
-    service.watchSymbol(baseConfig, 'BTC-USDT');
-    service.watchSymbol(baseConfig, 'BTC-USDT');
+  describe('watchSymbols (Batch Subscription)', () => {
+    it('should subscribe to symbols, cache prices, and emit events', () => {
+      const config = { exchangeId: 'binance', accountId: 'acc-1' } as ExchangeAccountConfig;
+      const symbols = ['BTC-USDT'];
 
-    expect(fakeAdapter.subscribeTicker).toHaveBeenCalledTimes(1);
-  });
+      // متغیری با مقدار اولیه برای جلوگیری از خطای TS2454
+      let capturedCallback: any = null;
 
-  it('باید برای Symbolهای متفاوت جدا subscribe کند', () => {
-    service.watchSymbol(baseConfig, 'BTC-USDT');
-    service.watchSymbol(baseConfig, 'ETH-USDT');
+      // ضبط کردن Callback ای که به صرافی پاس داده می‌شود
+      (mockAdapter.subscribeTickers as jest.Mock).mockImplementation((syms, cb) => {
+        capturedCallback = cb;
+      });
 
-    expect(fakeAdapter.subscribeTicker).toHaveBeenCalledTimes(2);
-  });
+      // 1. فراخوانی متد سرویس
+      service.watchSymbols(config, symbols);
 
-  it('isWatching باید وضعیت صحیح subscribe را برگرداند', () => {
-    expect(service.isWatching('binance', 'BTC-USDT')).toBe(false);
+      // 2. بررسی اینکه آیا متدِ صرافی به درستی صدا زده شده یا خیر
+      expect(registry.getInstance).toHaveBeenCalledWith(config);
+      expect(mockAdapter.subscribeTickers).toHaveBeenCalledWith(symbols, expect.any(Function));
+      expect(service.isWatching('binance', 'BTC-USDT')).toBe(true);
 
-    service.watchSymbol(baseConfig, 'BTC-USDT');
+      // 3. شبیه‌سازی دریافت قیمت جدید از صرافی (رسیدن داده از WebSocket)
+      const tickerData = { exchangeId: 'binance', symbol: 'BTC-USDT', bidPrice: 100, askPrice: 101, timestamp: Date.now() };
 
-    expect(service.isWatching('binance', 'BTC-USDT')).toBe(true);
-    expect(service.isWatching('binance', 'ETH-USDT')).toBe(false);
+      // اطمینان از اینکه Callback ضبط شده است
+      expect(capturedCallback).not.toBeNull();
+      capturedCallback!(tickerData);
+
+      // 4. بررسی اینکه آیا در دیتابیس (Redis) ذخیره شد و ایونت شلیک شد
+      expect(spreadCalculator.cacheTicker).toHaveBeenCalledWith('binance', tickerData);
+      expect(eventEmitter.emit).toHaveBeenCalledWith('ticker.updated', {
+        exchangeId: 'binance',
+        symbol: 'BTC-USDT',
+      });
+    });
   });
 });

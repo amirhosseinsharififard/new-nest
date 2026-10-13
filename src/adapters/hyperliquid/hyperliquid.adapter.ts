@@ -37,15 +37,17 @@ export class HyperliquidAdapter implements IExchangeAdapter {
   private readonly walletAddress: string;
 
   constructor(private readonly config: ExchangeAccountConfig) {
-    if (!config.publicKey || !config.privateKey) {
+  const isPublicOnly = !config.apiKey || config.accountId?.startsWith('public-market-data');
+
+    if (!isPublicOnly && (!config.apiKey || !config.apiSecret)) {
       throw new Error(
         'Hyperliquid Adapter نیازمند publicKey (آدرس کیف‌پول) و privateKey (کلید خصوصی) است',
       );
     }
-    this.walletAddress = config.publicKey;
+    this.walletAddress = config.publicKey??'';
     this.info = new HyperliquidInfoClient(config.restBaseUrl);
     this.wsManager = new HyperliquidWsManager(config.wsBaseUrl);
-    this.exchangeClient = new NktkasHyperliquidExchangeClient(config.privateKey);
+    this.exchangeClient = new NktkasHyperliquidExchangeClient(config.privateKey??'');
   }
 
   async connectWebSocket(): Promise<void> {
@@ -59,16 +61,76 @@ export class HyperliquidAdapter implements IExchangeAdapter {
   isWebSocketHealthy(): boolean {
     return this.wsManager.isHealthy();
   }
+// --- متدهای تکی (حفظ شده برای سازگاری قبلی) ---
 
-  subscribeTicker(symbol: string, cb: (data: TickerData) => void): void {
-    this.wsManager.connectTicker(toHyperliquidAsset(symbol), cb).catch((err) => {
-      this.logger.error(`خطا در اتصال Ticker: ${err.message}`);
+subscribeTicker(
+  symbol: string,
+  cb: (data: TickerData) => void,
+): void {
+  const asset = toHyperliquidAsset(symbol);
+
+  this.wsManager.connectTicker(asset, (data) => {
+    cb({
+      ...data,
+      symbol,
     });
-  }
+  }).catch((err) => {
+    this.logger.error(
+      `خطا در اتصال Ticker برای ${symbol}: ${err.message}`,
+    );
+  });
+}
+
 
   unsubscribeTicker(symbol: string): void {
-    this.wsManager.disconnectTicker(toHyperliquidAsset(symbol)); }
+    this.wsManager.disconnectTicker(toHyperliquidAsset(symbol));
+  }
 
+  // --- متدهای گروهی (جدید - برای دریافت ۱۰۰ ارز همزمان) ---
+
+subscribeTickers(
+  symbols: string[],
+  cb: (data: TickerData) => void,
+): void {
+  const hlAssets = symbols.map(toHyperliquidAsset);
+
+  const internalSymbolByAsset = new Map(
+    symbols.map((symbol) => [
+      toHyperliquidAsset(symbol),
+      symbol,
+    ]),
+  );
+
+  this.logger.log(
+    `Hyperliquid batch subscription: ${hlAssets.join(', ')}`,
+  );
+
+  this.wsManager
+    .connectTickers(hlAssets, (data) => {
+      cb({
+        ...data,
+        symbol:
+          internalSymbolByAsset.get(data.symbol) ?? data.symbol,
+      });
+    })
+    .then(() => {
+      this.logger.log('Hyperliquid batch subscription initialized');
+    })
+    .catch((err) => {
+      this.logger.error(
+        `Hyperliquid batch subscription failed: ${err.message}`,
+      );
+    });
+}
+
+
+  unsubscribeTickers(symbols: string[]): void {
+    const hlAssets = symbols.map(toHyperliquidAsset);
+    // برای سادگی فعلا از حلقه استفاده می‌کنیم (چون در Hyperliquid در نهایت یک استریم سراسری قطع می‌شود)
+    for (const asset of hlAssets) {
+      this.wsManager.disconnectTicker(asset);
+    }
+  }
   subscribePositionUpdates(
     accountId: string,
     cb: (data: PositionUpdate) => void,

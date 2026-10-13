@@ -26,24 +26,42 @@ export class BinanceWsManager {
   private readonly wsBaseUrl = 'wss://fstream.binance.com',
 ) {}
 
-  async connectTicker(
-  symbol: string,
-  cb: (data: TickerData) => void,
-): Promise<void> {
-  this.logger.log(
-    `PUBLIC TICKER CONNECT -> ${symbol} -> ${this.wsBaseUrl}`,
-  );
+// این متدها را به کلاس BinanceWsManager اضافه کنید
 
-  const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
+  async connectTickers(
+    symbols: string[],
+    cb: (data: TickerData) => void,
+  ): Promise<void> {
+    this.logger.log(`PUBLIC TICKER CONNECT BATCH -> ${symbols.length} symbols`);
 
-  this.tickerCallbacks.set(binanceSymbol, cb);
+    let hasNew = false;
+    for (const symbol of symbols) {
+      const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
+      if (!this.tickerCallbacks.has(binanceSymbol)) {
+        this.tickerCallbacks.set(binanceSymbol, cb);
+        hasNew = true;
+      }
+    }
 
-console.log('BEFORE reconnectTickerStream');
+    // فقط یک بار برای کل مجموعه نمادها Reconnect می‌کنیم
+    if (hasNew) {
+      await this.reconnectTickerStream();
+    }
+  }
 
-await this.reconnectTickerStream();
+  async disconnectTickers(symbols: string[]): Promise<void> {
+    let modified = false;
+    for (const symbol of symbols) {
+      const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
+      if (this.tickerCallbacks.delete(binanceSymbol)) {
+        modified = true;
+      }
+    }
 
-console.log('AFTER reconnectTickerStream');
-}
+    if (modified) {
+      await this.reconnectTickerStream();
+    }
+  }
 
   async disconnectTicker(symbol: string): Promise<void> {
     const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
@@ -133,6 +151,7 @@ console.log('AFTER reconnectTickerStream');
     30 * 60 * 1000,
   );
 }
+
   private handleUserDataMessage(raw: any): void {
     try {
       const parsed = JSON.parse(raw.toString());

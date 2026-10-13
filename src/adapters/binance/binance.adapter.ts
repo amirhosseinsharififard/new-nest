@@ -64,31 +64,55 @@ private readonly rest: BinanceRestClient | null;
     return this.wsManager.isHealthy();
   }
 
-subscribeTicker(
-  symbol: string,
-  cb: (data: TickerData) => void,
-): void {
-  console.log('🔥🔥 ADAPTER subscribeTicker CALLED');
-  console.log('SYMBOL:', symbol);
+// --- متدهای تکی (حفظ شده برای سازگاری قبلی) ---
+  subscribeTicker(
+    symbol: string,
+    cb: (data: TickerData) => void,
+  ): void {
+    console.log('🔥🔥 ADAPTER subscribeTicker CALLED');
+    console.log('SYMBOL:', symbol);
 
-  this.wsManager
-    .connectTicker(symbol, cb)
-    .then(() => {
-      console.log('🔥🔥 ADAPTER connectTicker DONE');
-    })
-    .catch((err) => {
-      console.error(
-        '🔥🔥 ADAPTER connectTicker ERROR:',
-        err,
-      );
-    });
-}
+    // به جای صدا زدن متد قدیمی، متد Bulk را با یک آرایه تک عضوی صدا می‌زنیم
+    this.wsManager
+      .connectTickers([symbol], cb)
+      .then(() => {
+        console.log('🔥🔥 ADAPTER connectTicker DONE');
+      })
+      .catch((err) => {
+        console.error('🔥🔥 ADAPTER connectTicker ERROR:', err);
+      });
+  }
 
   unsubscribeTicker(symbol: string): void {
-    this.wsManager.disconnectTicker(symbol).catch((err) => {
+    this.wsManager.disconnectTickers([symbol]).catch((err) => {
       this.logger.error(`خطا در لغو اشتراک Ticker Stream: ${err.message}`);
     });
   }
+
+  // --- متدهای گروهی (جدید - برای دریافت ۱۰۰ ارز همزمان) ---
+  subscribeTickers(
+    symbols: string[],
+    cb: (data: TickerData) => void,
+  ): void {
+    this.logger.log(`🔥🔥 ADAPTER subscribeTickers BATCH CALLED -> ${symbols.length} symbols`);
+
+    this.wsManager
+      .connectTickers(symbols, cb)
+      .then(() => {
+        this.logger.log(`🔥🔥 ADAPTER connectTickers BATCH DONE`);
+      })
+      .catch((err) => {
+        this.logger.error(`🔥🔥 ADAPTER connectTickers BATCH ERROR:`, err);
+      });
+  }
+
+  unsubscribeTickers(symbols: string[]): void {
+    this.wsManager.disconnectTickers(symbols).catch((err) => {
+      this.logger.error(`خطا در لغو اشتراک Batch Ticker Stream: ${err.message}`);
+    });
+  }
+
+  
 
 
   subscribePositionUpdates(

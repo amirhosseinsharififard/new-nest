@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   ExchangeRegistry,
   ExchangeAccountConfig,
@@ -14,66 +15,90 @@ export class PriceAggregatorService {
   constructor(
     private readonly registry: ExchangeRegistry,
     private readonly spreadCalculator: SpreadCalculatorService,
+    // Used to trigger the arbitrage engine immediately upon receiving new prices (Phase 5)
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  // --- Single-symbol methods (Kept for backward compatibility) ---
   watchSymbol(config: ExchangeAccountConfig, symbol: string): void {
-    const subscriptionKey = this.getSubscriptionKey(config, symbol);
+    this.watchSymbols(config, [symbol]);
+  }
 
-    if (this.activeSubscriptions.has(subscriptionKey)) {
+  unwatchSymbol(config: ExchangeAccountConfig, symbol: string): void {
+    this.unwatchSymbols(config, [symbol]);
+  }
+
+  // --- Batch methods (Optimized for multiple symbols) ---
+  watchSymbols(config: ExchangeAccountConfig, symbols: string[]): void {
+    // Filter out symbols that are already subscribed
+    const newSymbols = symbols.filter(
+      (sym) => !this.activeSubscriptions.has(this.getSubscriptionKey(config, sym)),
+    );
+
+    if (newSymbols.length === 0) {
       this.logger.debug(
-        `قبلا در حال گوش دادن به ${subscriptionKey} هستیم`,
+        `All ${symbols.length} symbols are already subscribed on ${config.exchangeId}.`,
       );
       return;
     }
 
     const adapter = this.registry.getInstance(config);
 
-    adapter.subscribeTicker(symbol, (data: TickerData) => {
-      this.logger.log(
-        `TICKER RECEIVED ${config.exchangeId} ${symbol}: ${JSON.stringify(data)}`,
-      );
+    // Call the adapter's batch subscribe method
+    adapter.subscribeTickers(newSymbols, (data: TickerData) => {
+      // Note: This callback is triggered hundreds of times per second
 
+      // 1. Cache the live price in Redis (short TTL is handled in SpreadCalculator)
       this.spreadCalculator
         .cacheTicker(config.exchangeId, data)
         .catch((err) => {
           this.logger.error(
-            `خطا در Cache کردن قیمت ${subscriptionKey}: ${err.message}`,
+            `Error caching price for ${data.symbol}: ${err.message}`,
           );
         });
+
+      // 2. Emit real-time event to wake up OpportunityDetectorService instantly
+      this.eventEmitter.emit('ticker.updated', {
+        exchangeId: config.exchangeId,
+        symbol: data.symbol,
+      });
     });
 
-    // ثبت subscription بعد از subscribe
-    this.activeSubscriptions.add(subscriptionKey);
+    // Register new symbols in the active subscriptions set
+    for (const sym of newSymbols) {
+      this.activeSubscriptions.add(this.getSubscriptionKey(config, sym));
+    }
 
     this.logger.log(
-      `شروع گوش دادن به ${symbol} روی ${config.exchangeId}`,
+      `Started listening to ${newSymbols.length} new symbols on ${config.exchangeId}`,
+    );
+  }
+
+  unwatchSymbols(config: ExchangeAccountConfig, symbols: string[]): void {
+    // Find symbols that are actually active and need to be removed
+    const symbolsToRemove = symbols.filter((sym) =>
+      this.activeSubscriptions.has(this.getSubscriptionKey(config, sym)),
+    );
+
+    if (symbolsToRemove.length === 0) return;
+
+    const adapter = this.registry.getInstance(config);
+    adapter.unsubscribeTickers(symbolsToRemove);
+
+    // Remove from the active subscriptions set
+    for (const sym of symbolsToRemove) {
+      this.activeSubscriptions.delete(this.getSubscriptionKey(config, sym));
+    }
+
+    this.logger.log(
+      `Stopped listening to ${symbolsToRemove.length} symbols on ${config.exchangeId}`,
     );
   }
 
   isWatching(exchangeId: string, symbol: string): boolean {
     return Array.from(this.activeSubscriptions).some(
       (key) =>
-        key.startsWith(`${exchangeId}:`) &&
-        key.endsWith(`:${symbol}`),
-    );
-  }
-
-  unwatchSymbol(
-    config: ExchangeAccountConfig,
-    symbol: string,
-  ): void {
-    const subscriptionKey = this.getSubscriptionKey(config, symbol);
-
-    if (!this.activeSubscriptions.delete(subscriptionKey)) {
-      return;
-    }
-
-    const adapter = this.registry.getInstance(config);
-
-    adapter.unsubscribeTicker(symbol);
-
-    this.logger.log(
-      `توقف گوش دادن به قیمت ${symbol} روی ${config.exchangeId}`,
+        key.startsWith(`${exchangeId}:`) && key.endsWith(`:${symbol}`),
     );
   }
 

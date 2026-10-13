@@ -2,6 +2,9 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { IExchangeAdapter } from './exchange-adapter.interface';
 
 type AdapterFactory = (config: ExchangeAccountConfig) => IExchangeAdapter;
+// اصلاح:
+
+
 
 export interface ExchangeAccountConfig {
   accountId: string;
@@ -17,6 +20,7 @@ export interface ExchangeAccountConfig {
   restBaseUrl: string;
   wsBaseUrl: string;
 }
+
 
 /**
  * Registry مرکزی صرافی‌ها.

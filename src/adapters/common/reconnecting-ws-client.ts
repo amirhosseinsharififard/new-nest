@@ -92,7 +92,7 @@ export class ReconnectingWsClient {
       this.ws.once('open', onOpenOnce);
 
       this.ws.on('message', (data) => {
-        console.log('🔥 WEBSOCKET MESSAGE RECEIVED');
+        // console.log('🔥 WEBSOCKET MESSAGE RECEIVED');
 
         this.options.onMessage(data);
       });

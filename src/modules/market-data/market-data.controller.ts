@@ -65,8 +65,9 @@ export class MarketDataController {
     exchange.slug,
     symbol,
   );
-
   result[exchange.slug] = ticker;
+  console.log(result)
+
 }
 
     return {

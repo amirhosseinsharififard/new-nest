@@ -52,12 +52,52 @@ export class OkxWsManager {
     );
   }
 
+  // این متدها را به کلاس OkxWsManager اضافه/جایگزین کنید
+  async connectTickers(instIds: string[], cb: (data: TickerData) => void): Promise<void> {
+    const newArgs: { channel: string; instId: string }[] = [];
+
+    for (const instId of instIds) {
+      if (!this.tickerCallbacks.has(instId)) {
+        this.tickerCallbacks.set(instId, cb);
+        newArgs.push({ channel: 'tickers', instId });
+      }
+    }
+
+    if (!this.publicWs) {
+      this.publicWs = new ReconnectingWsClient({
+        url: this.wsPublicUrl,
+        exchangeId: 'okx-public',
+        pingIntervalMs: 20_000,
+        onOpen: () => this.subscribeAllTickers(),
+        onMessage: (raw) => this.handleTickerMessage(raw),
+      });
+      await this.publicWs.connect();
+    } else if (newArgs.length > 0) {
+      // بسته‌های 10 تایی
+     for (const instId of instIds) {
+        const isNewSubscription = !this.tickerCallbacks.has(instId);
+
+        this.tickerCallbacks.set(instId, cb);
+
+        if (isNewSubscription) {
+          newArgs.push({
+            channel: 'tickers',
+            instId,
+          });
+        }
+      }
+    }
+  }
+
   private subscribeAllTickers(): void {
-    const args = Array.from(this.tickerCallbacks.keys()).map((instId) => ({
+    const allArgs = Array.from(this.tickerCallbacks.keys()).map((instId) => ({
       channel: 'tickers',
       instId,
     }));
-    this.publicWs?.send(JSON.stringify({ op: 'subscribe', args }));
+    for (let i = 0; i < allArgs.length; i += 10) {
+      const chunk = allArgs.slice(i, i + 10);
+      this.publicWs?.send(JSON.stringify({ op: 'subscribe', args: chunk }));
+    }
   }
 
   private handleTickerMessage(raw: any): void {

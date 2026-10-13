@@ -23,6 +23,7 @@ import { mapBybitOrderStatus, toBybitSymbol } from './bybit.mapper';
  * Adapter کامل Bybit V5 (Linear/USDT Perpetual Futures).
  * ⚠️ قبل از استفاده با پول واقعی حتما با Testnet تست کنید.
  */
+
 export class BybitAdapter implements IExchangeAdapter {
   readonly exchangeId = 'bybit';
   private readonly logger = new Logger(BybitAdapter.name);
@@ -30,14 +31,16 @@ export class BybitAdapter implements IExchangeAdapter {
   private readonly wsManager: BybitWsManager;
 
   constructor(private readonly config: ExchangeAccountConfig) {
-    if (!config.apiKey || !config.apiSecret) {
+const isPublicOnly = !config.apiKey || config.accountId?.startsWith('public-market-data');
+
+    if (!isPublicOnly && (!config.apiKey || !config.apiSecret)) {
       throw new Error('Bybit Adapter نیازمند apiKey و apiSecret است');
     }
     this.rest = new BybitRestClient(
-      { apiKey: config.apiKey, apiSecret: config.apiSecret },
+      { apiKey: config.apiKey??'', apiSecret: config.apiSecret??'' },
       config.restBaseUrl,
     );
-    this.wsManager = new BybitWsManager(config.apiKey, config.apiSecret, config.wsBaseUrl);
+    this.wsManager = new BybitWsManager(config.apiKey??'', config.apiSecret??"", config.wsBaseUrl);
   }
 
   async connectWebSocket(): Promise<void> {
@@ -52,16 +55,47 @@ export class BybitAdapter implements IExchangeAdapter {
     return this.wsManager.isHealthy();
   }
 
+// --- متدهای تکی (حفظ شده برای سازگاری قبلی) ---
   subscribeTicker(symbol: string, cb: (data: TickerData) => void): void {
-    this.wsManager.connectTicker(toBybitSymbol(symbol), cb).catch((err) => {
+    const bybitSymbol = toBybitSymbol(symbol);
+    this.wsManager.connectTickers([bybitSymbol], cb).catch((err) => {
       this.logger.error(`خطا در اتصال Ticker: ${err.message}`);
     });
   }
 
- unsubscribeTicker(symbol: string): void {
-    this.wsManager.disconnectTicker(toBybitSymbol(symbol));
+  unsubscribeTicker(symbol: string): void {
+    const bybitSymbol = toBybitSymbol(symbol);
+    this.wsManager.disconnectTicker(bybitSymbol); // در بای‌بیت این متد هم می‌تواند تک تک حذف کند، اما چون روی آرایه ساختیم نیازی به تغییر اسم متد در ws.ts نبود
   }
 
+  // --- متدهای گروهی (جدید - برای دریافت ۱۰۰ ارز همزمان) ---
+  subscribeTickers(
+    symbols: string[],
+    cb: (data: TickerData) => void,
+  ): void {
+    this.logger.log(`🔥🔥 BYBIT ADAPTER subscribeTickers BATCH CALLED -> ${symbols.length} symbols`);
+
+    // مپ کردن همه نمادها به فرمت بای‌بیت (مثلاً BTC-USDT به BTCUSDT)
+    const bybitSymbols = symbols.map(toBybitSymbol);
+
+    this.wsManager
+      .connectTickers(bybitSymbols, cb)
+      .then(() => {
+        this.logger.log(`🔥🔥 BYBIT ADAPTER connectTickers BATCH DONE`);
+      })
+      .catch((err) => {
+        this.logger.error(`🔥🔥 BYBIT ADAPTER connectTickers BATCH ERROR:`, err);
+      });
+  }
+
+  unsubscribeTickers(symbols: string[]): void {
+    const bybitSymbols = symbols.map(toBybitSymbol);
+
+    // اگر متد disconnectTickers را در bybit.ws.ts نساختید، این حلقه کار را راه می‌اندازد
+    for (const sym of bybitSymbols) {
+       this.wsManager.disconnectTicker(sym);
+    }
+  }
 
   subscribePositionUpdates(
     accountId: string,

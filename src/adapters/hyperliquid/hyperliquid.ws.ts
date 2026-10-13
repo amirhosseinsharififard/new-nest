@@ -68,7 +68,18 @@ export class HyperliquidWsManager {
     }
   }
 
+// این متد را به کلاس HyperliquidWsManager اضافه کنید
 
+  async connectTickers(coins: string[], cb: (data: TickerData) => void): Promise<void> {
+    for (const coin of coins) {
+      this.tickerCallbacks.set(coin, cb);
+    }
+
+    await this.ensureConnected();
+    // کانال allMids همیشه همه ارزها را می‌فرستد، پس یک بار subscribe کافی است
+    this.ws?.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'allMids' } }));
+  }
+  
   private handleMessage(raw: any): void {
     try {
       const parsed = JSON.parse(raw.toString());

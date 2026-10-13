@@ -6,7 +6,8 @@ import { calculateSpread, SpreadResult } from './spread-calculation.util';
 
 /** ساخت کلید Redis برای ذخیره آخرین قیمت هر (صرافی، Symbol) */
 export function buildPriceCacheKey(exchangeSlug: string, symbol: string): string {
-  return `price:${exchangeSlug}:${symbol}`;
+  const normalizedSymbol = symbol.replace(/[\/\-_]/g, '').toUpperCase();
+  return `price:${exchangeSlug.toLowerCase()}:${normalizedSymbol}`;
 }
 
 /**
@@ -38,10 +39,8 @@ async cacheTicker(
   ticker: TickerData,
 ): Promise<void> {
   const key = buildPriceCacheKey(exchangeSlug, ticker.symbol);
-
-  console.log('========== CACHE TICKER ==========');
-  console.log('KEY:', key);
-  console.log('TICKER:', ticker);
+  // console.log('KEY:', key);
+  // console.log('TICKER:', ticker);
 
   await this.redisService.set(
     key,
@@ -49,7 +48,7 @@ async cacheTicker(
     PRICE_CACHE_TTL_SECONDS,
   );
 
-  console.log('CACHE SAVED:', key);
+  // console.log('CACHE SAVED:', key);
 }
 
  async getCachedTicker(
@@ -57,10 +56,8 @@ async cacheTicker(
   symbol: string,
 ): Promise<TickerData | null> {
   const key = buildPriceCacheKey(exchangeSlug, symbol);
-
-  const raw = await this.redisService.get(key);
-
   console.log('========== GET TICKER ==========');
+  const raw = await this.redisService.get(key);
   console.log('KEY:', key);
   console.log('RAW:', raw);
 
