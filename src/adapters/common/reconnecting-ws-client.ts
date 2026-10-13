@@ -32,16 +32,16 @@ export class ReconnectingWsClient {
   }
 
   connect(): Promise<void> {
-  console.log(
-    '🔥 CONNECT CALLED:',
-    this.options.exchangeId,
-    this.options.url,
-  );
+  // console.log(
+  //   '🔥 CONNECT CALLED:',
+  //   this.options.exchangeId,
+  //   this.options.url,
+  // );
 
   this.isManuallyClosed = false;
 
   return new Promise((resolve, reject) => {
-    console.log('🔥 BEFORE NEW WEBSOCKET');
+    // console.log('🔥 BEFORE NEW WEBSOCKET');
 
     let settled = false;
 
@@ -65,7 +65,7 @@ export class ReconnectingWsClient {
     try {
       this.ws = new WebSocket(this.options.url);
 
-      console.log('🔥 AFTER NEW WEBSOCKET');
+      // console.log('🔥 AFTER NEW WEBSOCKET');
 
       const onOpenOnce = () => {
         if (settled) return;
@@ -76,10 +76,10 @@ export class ReconnectingWsClient {
         this.healthy = true;
         this.reconnectAttempts = 0;
 
-        console.log(
-          '🔥🔥🔥 WEBSOCKET OPEN:',
-          this.options.url,
-        );
+        // console.log(
+        //   '🔥🔥🔥 WEBSOCKET OPEN:',
+        //   this.options.url,
+        // );
 
         this.logger.log('اتصال WebSocket برقرار شد');
 

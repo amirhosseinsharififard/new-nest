@@ -107,8 +107,10 @@ export class BinanceWsManager {
         exchangeId: 'binance',
         symbol: payload.s,
         bidPrice: parseFloat(payload.b),
+        bidSize: parseFloat(payload.B),
         askPrice: parseFloat(payload.a),
-        timestamp: Date.now(),
+        askSize: parseFloat(payload.A),
+        timestamp: payload.T ?? payload.E ?? Date.now(),
       };
       cb(tickerData);
     } catch (err) {

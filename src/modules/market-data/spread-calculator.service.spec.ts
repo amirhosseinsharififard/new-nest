@@ -24,14 +24,16 @@ describe('SpreadCalculatorService', () => {
     await client.flushall();
   });
 
-  const buildTicker = (overrides: Partial<TickerData> = {}): TickerData => ({
-    exchangeId: 'binance',
-    symbol: 'BTC-USDT',
-    bidPrice: 100,
-    askPrice: 100.1,
-    timestamp: Date.now(),
-    ...overrides,
-  });
+const buildTicker = (overrides: Partial<TickerData> = {}): TickerData => ({
+  exchangeId: 'binance',
+  symbol: 'BTCUSDT',
+  bidPrice: 80000,
+  bidSize: 1.5,       // مقدار پیش‌فرض اضافه شد
+  askPrice: 80001,
+  askSize: 2.0,       // مقدار پیش‌فرض اضافه شد
+  timestamp: Date.now(),
+  ...overrides,
+});
 
   describe('cacheTicker / getCachedTicker', () => {
     it('باید یک Ticker را ذخیره و همان را برگرداند', async () => {

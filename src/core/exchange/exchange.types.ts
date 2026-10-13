@@ -21,9 +21,11 @@ export enum OrderStatus {
 
 export interface TickerData {
   exchangeId: string;
-  symbol: string; // نماد نرمالایز شده داخلی، مثلا "BTC-USDT"
+  symbol: string;
   bidPrice: number;
+  bidSize: number;  // <--- اضافه شود
   askPrice: number;
+  askSize: number;  // <--- اضافه شود
   timestamp: number;
 }
 

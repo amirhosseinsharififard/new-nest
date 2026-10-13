@@ -64,11 +64,11 @@ export class ExchangeRegistry {
   const key = `${config.exchangeId}:${config.accountId}`;
   const existing = this.activeInstances.get(key);
 
-  console.log('========== GET INSTANCE ==========');
-  console.log('exchangeId:', config.exchangeId);
-  console.log('accountId:', config.accountId);
-  console.log('key:', key);
-  console.log('existing:', existing);
+  // console.log('========== GET INSTANCE ==========');
+  // console.log('exchangeId:', config.exchangeId);
+  // console.log('accountId:', config.accountId);
+  // console.log('key:', key);
+  // console.log('existing:', existing);
 
   if (existing) {
     console.log('✅ RETURN EXISTING ADAPTER');

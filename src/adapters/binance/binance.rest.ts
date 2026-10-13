@@ -119,8 +119,11 @@ export class BinanceRestClient {
   async getBookTicker(symbol: string) {
     return this.publicRequest<{
       symbol: string;
-      bidPrice: string;
-      askPrice: string;
+      bidPrice: string; // بهترین قیمت خرید
+      bidQty: string;   // تعداد توکن موجود در بهترین قیمت خرید (حجم)
+      askPrice: string; // بهترین قیمت فروش
+      askQty: string;   // تعداد توکن موجود در بهترین قیمت فروش (حجم)
+      time: number;
     }>('/fapi/v1/ticker/bookTicker', { symbol });
   }
 

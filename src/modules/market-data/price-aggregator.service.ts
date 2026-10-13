@@ -15,11 +15,9 @@ export class PriceAggregatorService {
   constructor(
     private readonly registry: ExchangeRegistry,
     private readonly spreadCalculator: SpreadCalculatorService,
-    // Used to trigger the arbitrage engine immediately upon receiving new prices (Phase 5)
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
-  // --- Single-symbol methods (Kept for backward compatibility) ---
   watchSymbol(config: ExchangeAccountConfig, symbol: string): void {
     this.watchSymbols(config, [symbol]);
   }
@@ -28,9 +26,7 @@ export class PriceAggregatorService {
     this.unwatchSymbols(config, [symbol]);
   }
 
-  // --- Batch methods (Optimized for multiple symbols) ---
   watchSymbols(config: ExchangeAccountConfig, symbols: string[]): void {
-    // Filter out symbols that are already subscribed
     const newSymbols = symbols.filter(
       (sym) => !this.activeSubscriptions.has(this.getSubscriptionKey(config, sym)),
     );
@@ -44,11 +40,15 @@ export class PriceAggregatorService {
 
     const adapter = this.registry.getInstance(config);
 
-    // Call the adapter's batch subscribe method
     adapter.subscribeTickers(newSymbols, (data: TickerData) => {
-      // Note: This callback is triggered hundreds of times per second
+      // گارد اعتبارسنجی: جلوگیری از کرش در صورت نبود symbol
+      if (!data || !data.symbol) {
+        this.logger.warn(
+          `[MALFORMED TICKER] Dropped ticker without symbol from ${config.exchangeId}: ${JSON.stringify(data)}`,
+        );
+        return;
+      }
 
-      // 1. Cache the live price in Redis (short TTL is handled in SpreadCalculator)
       this.spreadCalculator
         .cacheTicker(config.exchangeId, data)
         .catch((err) => {
@@ -57,14 +57,12 @@ export class PriceAggregatorService {
           );
         });
 
-      // 2. Emit real-time event to wake up OpportunityDetectorService instantly
       this.eventEmitter.emit('ticker.updated', {
         exchangeId: config.exchangeId,
         symbol: data.symbol,
       });
     });
 
-    // Register new symbols in the active subscriptions set
     for (const sym of newSymbols) {
       this.activeSubscriptions.add(this.getSubscriptionKey(config, sym));
     }
@@ -75,7 +73,6 @@ export class PriceAggregatorService {
   }
 
   unwatchSymbols(config: ExchangeAccountConfig, symbols: string[]): void {
-    // Find symbols that are actually active and need to be removed
     const symbolsToRemove = symbols.filter((sym) =>
       this.activeSubscriptions.has(this.getSubscriptionKey(config, sym)),
     );
@@ -85,7 +82,6 @@ export class PriceAggregatorService {
     const adapter = this.registry.getInstance(config);
     adapter.unsubscribeTickers(symbolsToRemove);
 
-    // Remove from the active subscriptions set
     for (const sym of symbolsToRemove) {
       this.activeSubscriptions.delete(this.getSubscriptionKey(config, sym));
     }

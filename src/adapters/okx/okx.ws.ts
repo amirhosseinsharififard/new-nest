@@ -102,22 +102,33 @@ export class OkxWsManager {
 
   private handleTickerMessage(raw: any): void {
     try {
-      const parsed = JSON.parse(raw.toString());
+      const rawStr = raw.toString();
+      if (rawStr === 'pong') return;
+
+      const parsed = JSON.parse(rawStr);
+
+      if (parsed.event === 'subscribe' || parsed.event === 'unsubscribe' || parsed.event === 'error') {
+        return;
+      }
+
       if (parsed.arg?.channel !== 'tickers' || !parsed.data?.length) return;
 
       const item = parsed.data[0];
-      const cb = this.tickerCallbacks.get(item.instId);
+      const instId = item.instId; // مثال: "BTC-USDT" یا "BTC-USDT-SWAP"
+      const cb = this.tickerCallbacks.get(instId);
       if (!cb) return;
 
       cb({
         exchangeId: 'okx',
-        symbol: item.instId,
-        bidPrice: parseFloat(item.bidPx),
-        askPrice: parseFloat(item.askPx),
-        timestamp: parseInt(item.ts, 10) || Date.now(),
+        symbol: instId,
+        bidPrice: item.bidPx ? parseFloat(item.bidPx) : 0,
+        bidSize: item.bidSz ? parseFloat(item.bidSz) : 0,   // حجم خرید در OKX tickers
+        askPrice: item.askPx ? parseFloat(item.askPx) : 0,
+        askSize: item.askSz ? parseFloat(item.askSz) : 0,   // حجم فروش در OKX tickers
+        timestamp: item.ts ? Number(item.ts) : Date.now(),
       });
     } catch (err) {
-      this.logger.error(`خطا در پردازش پیام Ticker: ${(err as Error).message}`);
+      this.logger.error(`خطا در پردازش پیام Ticker در OKX: ${(err as Error).message}`);
     }
   }
 
@@ -169,25 +180,40 @@ export class OkxWsManager {
 
   private handlePrivateMessage(raw: any, accountId: string): void {
     try {
-      const parsed = JSON.parse(raw.toString());
-      if (parsed.arg?.channel !== 'positions' || !this.positionCallback) return;
+    const rawStr = raw.toString();
+    if (rawStr === 'pong') return;
 
-      for (const pos of parsed.data ?? []) {
-        const size = parseFloat(pos.pos);
-        this.positionCallback({
-          exchangeId: 'okx',
-          accountId,
-          symbol: pos.instId,
-          side: mapOkxPositionSide(pos.posSide, size),
-          status: size === 0 ? OrderStatus.CANCELLED : OrderStatus.FILLED,
-          quantity: Math.abs(size),
-          entryPrice: parseFloat(pos.avgPx) || null,
-          timestamp: parseInt(pos.uTime, 10) || Date.now(),
-        });
-      }
-    } catch (err) {
-      this.logger.error(`خطا در پردازش پیام Private: ${(err as Error).message}`);
+    const parsed = JSON.parse(rawStr);
+
+    // پیام‌های ایونت یا خطا را رد کنید
+    if (parsed.event === 'subscribe' || parsed.event === 'unsubscribe' || parsed.event === 'error') {
+      return;
     }
+
+    // استخراج نماد از arg.instId
+    const instId = parsed.arg?.instId;
+    if (!instId || !parsed.data || parsed.data.length === 0) return;
+
+    const book = parsed.data[0];
+    const bestBid = book.bids?.[0];
+    const bestAsk = book.asks?.[0];
+
+    const cb = this.tickerCallbacks.get(instId.toUpperCase());
+    if (!cb) return;
+
+    cb({
+      exchangeId: 'okx',
+      symbol: instId, // <--- بسیار مهم: از instId استفاده کنید، نه parsed.data[0].symbol!
+      bidPrice: bestBid ? parseFloat(bestBid[0]) : 0,
+      bidSize: bestBid ? parseFloat(bestBid[1]) : 0,
+      askPrice: bestAsk ? parseFloat(bestAsk[0]) : 0,
+      askSize: bestAsk ? parseFloat(bestAsk[1]) : 0,
+      timestamp: book.ts ? Number(book.ts) : Date.now(),
+    });
+    } catch (err) {
+      this.logger.error(`خطا در پردازش پیام OKX: ${(err as Error).message}`);
+    }
+
   }
 
   isHealthy(): boolean {

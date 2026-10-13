@@ -6,6 +6,7 @@ import {
   toBinanceSymbol,
 } from './binance.mapper';
 
+
 describe('Binance Mapper', () => {
   describe('toBinanceSymbol / fromBinanceSymbol', () => {
     it('باید نماد داخلی را به فرمت Binance تبدیل کند', () => {
