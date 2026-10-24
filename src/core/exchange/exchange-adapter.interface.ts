@@ -45,6 +45,8 @@ export interface IExchangeAdapter {
     symbol: string,
   ): Promise<PositionStatus>;
   getBalance(accountId: string): Promise<Balance[]>;
+
+  getMarketSymbols?(): Promise<string[]>;
 }
 
 /**

@@ -50,6 +50,24 @@ export class HyperliquidInfoClient {
     return this.post<Record<string, string>>({ type: 'allMids' });
   }
 
+  async getMarketSymbols(): Promise<string[]> {
+    const response = await this.post<{
+      universe: Array<{
+        name: string;
+        szDecimals: number;
+        maxLeverage: number;
+      }>;
+    }>({ type: 'meta' });
+
+    return [
+      ...new Set(
+        response.universe
+          .map((asset) => asset.name.trim().toUpperCase())
+          .filter((name) => name.length > 0)
+          .map((name) => `${name}-USDT`),
+      ),
+    ];
+  }
   /** بهترین Bid/Ask از L2 Order Book */
   async getL2Book(coin: string) {
     return this.post<{ levels: [{ px: string; sz: string }[], { px: string; sz: string }[]] }>({
@@ -69,3 +87,5 @@ export class HyperliquidInfoClient {
     }>({ type: 'clearinghouseState', user: walletAddress });
   }
 }
+
+

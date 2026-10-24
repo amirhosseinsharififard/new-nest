@@ -1,3 +1,4 @@
+
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
@@ -5,7 +6,10 @@ import {
   ExchangeAccountConfig,
 } from '../../core/exchange/exchange-registry';
 import { TickerData } from '../../core/exchange/exchange.types';
-import { SpreadCalculatorService } from './spread-calculator.service';
+import {
+  SpreadCalculatorService,
+  TICKER_UPDATED_EVENT,
+} from './spread-calculator.service';
 
 @Injectable()
 export class PriceAggregatorService {
@@ -28,7 +32,10 @@ export class PriceAggregatorService {
 
   watchSymbols(config: ExchangeAccountConfig, symbols: string[]): void {
     const newSymbols = symbols.filter(
-      (sym) => !this.activeSubscriptions.has(this.getSubscriptionKey(config, sym)),
+      (symbol) =>
+        !this.activeSubscriptions.has(
+          this.getSubscriptionKey(config, symbol),
+        ),
     );
 
     if (newSymbols.length === 0) {
@@ -41,30 +48,35 @@ export class PriceAggregatorService {
     const adapter = this.registry.getInstance(config);
 
     adapter.subscribeTickers(newSymbols, (data: TickerData) => {
-      // گارد اعتبارسنجی: جلوگیری از کرش در صورت نبود symbol
-      if (!data || !data.symbol) {
+      if (!data?.symbol) {
         this.logger.warn(
-          `[MALFORMED TICKER] Dropped ticker without symbol from ${config.exchangeId}: ${JSON.stringify(data)}`,
+          `[MALFORMED TICKER] Dropped ticker from ${config.exchangeId}: ${JSON.stringify(data)}`,
         );
         return;
       }
 
-      this.spreadCalculator
+      void this.spreadCalculator
         .cacheTicker(config.exchangeId, data)
-        .catch((err) => {
+        .then(() => {
+          this.eventEmitter.emit(TICKER_UPDATED_EVENT, {
+            exchangeSlug: config.exchangeId,
+            symbol: data.symbol,
+          });
+        })
+        .catch((error: unknown) => {
+          const message =
+            error instanceof Error ? error.message : String(error);
+
           this.logger.error(
-            `Error caching price for ${data.symbol}: ${err.message}`,
+            `Error caching price for ${data.symbol} on ${config.exchangeId}: ${message}`,
           );
         });
-
-      this.eventEmitter.emit('ticker.updated', {
-        exchangeId: config.exchangeId,
-        symbol: data.symbol,
-      });
     });
 
-    for (const sym of newSymbols) {
-      this.activeSubscriptions.add(this.getSubscriptionKey(config, sym));
+    for (const symbol of newSymbols) {
+      this.activeSubscriptions.add(
+        this.getSubscriptionKey(config, symbol),
+      );
     }
 
     this.logger.log(
@@ -72,18 +84,27 @@ export class PriceAggregatorService {
     );
   }
 
-  unwatchSymbols(config: ExchangeAccountConfig, symbols: string[]): void {
-    const symbolsToRemove = symbols.filter((sym) =>
-      this.activeSubscriptions.has(this.getSubscriptionKey(config, sym)),
+  unwatchSymbols(
+    config: ExchangeAccountConfig,
+    symbols: string[],
+  ): void {
+    const symbolsToRemove = symbols.filter((symbol) =>
+      this.activeSubscriptions.has(
+        this.getSubscriptionKey(config, symbol),
+      ),
     );
 
-    if (symbolsToRemove.length === 0) return;
+    if (symbolsToRemove.length === 0) {
+      return;
+    }
 
     const adapter = this.registry.getInstance(config);
     adapter.unsubscribeTickers(symbolsToRemove);
 
-    for (const sym of symbolsToRemove) {
-      this.activeSubscriptions.delete(this.getSubscriptionKey(config, sym));
+    for (const symbol of symbolsToRemove) {
+      this.activeSubscriptions.delete(
+        this.getSubscriptionKey(config, symbol),
+      );
     }
 
     this.logger.log(
@@ -92,16 +113,27 @@ export class PriceAggregatorService {
   }
 
   isWatching(exchangeId: string, symbol: string): boolean {
-    return Array.from(this.activeSubscriptions).some(
-      (key) =>
-        key.startsWith(`${exchangeId}:`) && key.endsWith(`:${symbol}`),
-    );
+  const normalizedExchange = exchangeId.toLowerCase();
+  const normalizedSymbol = this.normalizeSymbol(symbol);
+
+  return Array.from(this.activeSubscriptions).some((key) => {
+    const prefix = `${normalizedExchange}:`;
+    if (!key.startsWith(prefix)) {
+      return false;
+    }
+
+    return key.endsWith(`:${normalizedSymbol}`);
+  });
   }
 
   private getSubscriptionKey(
     config: ExchangeAccountConfig,
     symbol: string,
   ): string {
-    return `${config.exchangeId}:${config.accountId}:${symbol}`;
+    return `${config.exchangeId.toLowerCase()}:${config.accountId}:${this.normalizeSymbol(symbol)}`;
+  }
+
+  private normalizeSymbol(symbol: string): string {
+    return symbol.replace(/[\/_-]/g, '').toUpperCase();
   }
 }

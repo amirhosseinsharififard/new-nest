@@ -52,15 +52,28 @@ export class OkxWsManager {
     );
   }
 
-  // این متدها را به کلاس OkxWsManager اضافه/جایگزین کنید
-  async connectTickers(instIds: string[], cb: (data: TickerData) => void): Promise<void> {
+  async connectTickers(
+    instIds: string[],
+    cb: (data: TickerData) => void,
+  ): Promise<void> {
     const newArgs: { channel: string; instId: string }[] = [];
 
-    for (const instId of instIds) {
-      if (!this.tickerCallbacks.has(instId)) {
-        this.tickerCallbacks.set(instId, cb);
-        newArgs.push({ channel: 'tickers', instId });
+    for (const rawInstId of instIds) {
+      const instId = rawInstId.trim().toUpperCase();
+
+      if (!instId || this.tickerCallbacks.has(instId)) {
+        continue;
       }
+
+      this.tickerCallbacks.set(instId, cb);
+      newArgs.push({
+        channel: 'tickers',
+        instId,
+      });
+    }
+
+    if (this.tickerCallbacks.size === 0) {
+      return;
     }
 
     if (!this.publicWs) {
@@ -71,21 +84,24 @@ export class OkxWsManager {
         onOpen: () => this.subscribeAllTickers(),
         onMessage: (raw) => this.handleTickerMessage(raw),
       });
+
       await this.publicWs.connect();
-    } else if (newArgs.length > 0) {
-      // بسته‌های 10 تایی
-     for (const instId of instIds) {
-        const isNewSubscription = !this.tickerCallbacks.has(instId);
+      return;
+    }
 
-        this.tickerCallbacks.set(instId, cb);
+    if (!this.publicWs.isHealthy() || newArgs.length === 0) {
+      return;
+    }
 
-        if (isNewSubscription) {
-          newArgs.push({
-            channel: 'tickers',
-            instId,
-          });
-        }
-      }
+    for (let i = 0; i < newArgs.length; i += 10) {
+      const chunk = newArgs.slice(i, i + 10);
+
+      this.publicWs.send(
+        JSON.stringify({
+          op: 'subscribe',
+          args: chunk,
+        }),
+      );
     }
   }
 

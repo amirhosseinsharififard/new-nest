@@ -23,13 +23,11 @@ export class MarketDataController {
     private readonly exchangeRepository: Repository<Exchange>,
   ) {}
 
-  @Get('spread')
+    @Get('spread')
   async getSpread(
     @Query('symbol') symbol: string,
     @Query('exchangeA') exchangeA: string,
     @Query('exchangeB') exchangeB: string,
-    @Query('feeA') feeA?: string,
-    @Query('feeB') feeB?: string,
   ) {
     if (!symbol || !exchangeA || !exchangeB) {
       throw new BadRequestException(
@@ -41,10 +39,11 @@ export class MarketDataController {
       symbol,
       exchangeA,
       exchangeB,
-      feeA ? parseFloat(feeA) : 0.04,
-      feeB ? parseFloat(feeB) : 0.04,
+      0, // کارمزد صرافی A؛ فعلاً صفر
+      0, // کارمزد صرافی B؛ فعلاً صفر
     );
   }
+
 
   @Get('live')
   async getLiveMarket(@Query('symbol') symbol: string) {
@@ -68,11 +67,29 @@ export class MarketDataController {
   result[exchange.slug] = ticker;
   console.log(result)
 
-}
+  }
 
     return {
       symbol,
       exchanges: result,
     };
   }
+
+
+
+@Get('live/all')
+async getAllLiveMarket() {
+  const exchanges = await this.exchangeRepository.find({
+    where: {
+      isActive: true,
+    },
+  });
+
+  return this.spreadCalculator.getAllLiveMarketData(
+    exchanges.map((exchange) => exchange.slug),
+  );
+}
+
+
+
 }

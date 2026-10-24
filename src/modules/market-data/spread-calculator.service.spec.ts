@@ -15,7 +15,7 @@ describe('SpreadCalculatorService', () => {
     client = new RedisMock();
     redisService = new RedisService(client);
     eventEmitter = { emit: jest.fn() };
-    service = new SpreadCalculatorService(redisService, eventEmitter);
+  service = new SpreadCalculatorService(redisService);
   });
 
   afterEach(async () => {

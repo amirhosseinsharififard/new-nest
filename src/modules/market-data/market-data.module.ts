@@ -21,7 +21,7 @@ import { MarketDataSubscriptionService } from './market-data-subscription.servic
     ExchangeAccountsModule,
   ],
   controllers: [MarketDataController],
-  providers: [SpreadCalculatorService, PriceAggregatorService, StrategyPriceWatcherService,MarketDataSubscriptionService],
+  providers: [SpreadCalculatorService, PriceAggregatorService, StrategyPriceWatcherService,MarketDataSubscriptionService,],
   exports: [SpreadCalculatorService, PriceAggregatorService],
 })
 export class MarketDataModule {}

@@ -1,22 +1,27 @@
+
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RedisService } from '../../common/redis/redis.service';
 import { TickerData } from '../../core/exchange/exchange.types';
-import { calculateSpread, SpreadResult } from './spread-calculation.util';
+import {
+  calculateSpread,
+  SpreadResult,
+} from './spread-calculation.util';
 
-/** ساخت کلید Redis برای ذخیره آخرین قیمت هر (صرافی، Symbol) */
-export function buildPriceCacheKey(exchangeSlug: string, symbol: string): string {
-  const normalizedSymbol = symbol.replace(/[\/\-_]/g, '').toUpperCase();
+/** Redis key: price:<exchange>:<normalized-symbol> */
+export function buildPriceCacheKey(
+  exchangeSlug: string,
+  symbol: string,
+): string {
+  const normalizedSymbol = symbol
+    .replace(/[\/_-]/g, '')
+    .toUpperCase();
+
   return `price:${exchangeSlug.toLowerCase()}:${normalizedSymbol}`;
 }
 
-/**
- * TTL کش قیمت. اگر قیمتی قدیمی‌تر از این مقدار باشه یعنی WebSocket
- * برای اون Symbol قطع شده یا دیگه Update نمی‌گیریم — نباید بهش اعتماد کرد.
- */
+/** Last price remains valid for 10 seconds. */
 const PRICE_CACHE_TTL_SECONDS = 10;
 
-/** Event که با هر آپدیت قیمت جدید Emit میشه؛ OpportunityDetectorService به این گوش می‌ده */
 export const TICKER_UPDATED_EVENT = 'ticker.updated';
 
 export interface TickerUpdatedPayload {
@@ -28,49 +33,42 @@ export interface TickerUpdatedPayload {
 export class SpreadCalculatorService {
   private readonly logger = new Logger(SpreadCalculatorService.name);
 
-  constructor(
-    private readonly redisService: RedisService,
-    private readonly eventEmitter: EventEmitter2,
-  ) {}
+  constructor(private readonly redisService: RedisService) {}
 
-  /** ذخیره آخرین قیمت دریافتی از WebSocket یک صرافی (توسط PriceAggregatorService صدا زده میشه) */
-async cacheTicker(
-  exchangeSlug: string,
-  ticker: TickerData,
-): Promise<void> {
-  const key = buildPriceCacheKey(exchangeSlug, ticker.symbol);
-  // console.log('KEY:', key);
-  // console.log('TICKER:', ticker);
+  async cacheTicker(
+    exchangeSlug: string,
+    ticker: TickerData,
+  ): Promise<void> {
+    const key = buildPriceCacheKey(exchangeSlug, ticker.symbol);
 
-  await this.redisService.set(
-    key,
-    JSON.stringify(ticker),
-    PRICE_CACHE_TTL_SECONDS,
-  );
+    await this.redisService.set(
+      key,
+      JSON.stringify(ticker),
+      PRICE_CACHE_TTL_SECONDS,
+    );
 
-  // console.log('CACHE SAVED:', key);
-}
+    this.logger.debug(`Cached ticker: ${key}`);
+  }
 
- async getCachedTicker(
-  exchangeSlug: string,
-  symbol: string,
-): Promise<TickerData | null> {
-  const key = buildPriceCacheKey(exchangeSlug, symbol);
-  console.log('========== GET TICKER ==========');
-  const raw = await this.redisService.get(key);
-  console.log('KEY:', key);
-  console.log('RAW:', raw);
+  async getCachedTicker(
+    exchangeSlug: string,
+    symbol: string,
+  ): Promise<TickerData | null> {
+    const key = buildPriceCacheKey(exchangeSlug, symbol);
+    const raw = await this.redisService.get(key);
 
-  return raw ? (JSON.parse(raw) as TickerData) : null;
-}
-  /**
-   * محاسبه Spread زنده بین دو صرافی برای یک Symbol، با استفاده از
-   * آخرین قیمت‌های Cache شده در Redis.
-   *
-   * اگر یکی از دو قیمت موجود نباشه (یا منقضی شده باشه)، به‌جای محاسبه
-   * نادرست، خطای صریح می‌ده — چون Spread محاسبه‌شده با قیمت قدیمی
-   * می‌تونه باعث تصمیم معاملاتی اشتباه بشه.
-   */
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(raw) as TickerData;
+    } catch (error) {
+      this.logger.warn(`Invalid cached ticker JSON for ${key}`);
+      return null;
+    }
+  }
+
   async getLiveSpread(
     symbol: string,
     exchangeASlug: string,
@@ -85,15 +83,76 @@ async cacheTicker(
 
     if (!tickerA) {
       throw new NotFoundException(
-        `قیمت زنده‌ای برای ${symbol} در صرافی ${exchangeASlug} موجود نیست (Cache خالی یا منقضی)`,
-      );
-    }
-    if (!tickerB) {
-      throw new NotFoundException(
-        `قیمت زنده‌ای برای ${symbol} در صرافی ${exchangeBSlug} موجود نیست (Cache خالی یا منقضی)`,
+        `No live price for ${symbol} on ${exchangeASlug}; cache is empty or expired.`,
       );
     }
 
-    return calculateSpread(symbol, tickerA, tickerB, feeAPercent, feeBPercent);
+    if (!tickerB) {
+      throw new NotFoundException(
+        `No live price for ${symbol} on ${exchangeBSlug}; cache is empty or expired.`,
+      );
+    }
+
+    return calculateSpread(
+      symbol,
+      tickerA,
+      tickerB,
+      feeAPercent,
+      feeBPercent,
+    );
   }
+
+
+async getAllLiveMarketData(exchangeSlugs: string[]) {
+  const symbols: Record<
+    string,
+    {
+      symbol: string;
+      exchanges: Record<string, TickerData>;
+    }
+  > = {};
+
+  await Promise.all(
+    exchangeSlugs.map(async (exchangeSlug) => {
+      const keys = await this.redisService.scanKeys(
+        `price:${exchangeSlug.toLowerCase()}:*`,
+      );
+
+      await Promise.all(
+        keys.map(async (key) => {
+          const raw = await this.redisService.get(key);
+
+          if (!raw) return;
+
+          try {
+            const ticker = JSON.parse(raw) as TickerData;
+
+            if (!ticker?.symbol) return;
+
+            const normalizedSymbol = ticker.symbol
+              .replace(/[\/_-]/g, '')
+              .toUpperCase();
+
+            if (!symbols[normalizedSymbol]) {
+              symbols[normalizedSymbol] = {
+                symbol: ticker.symbol,
+                exchanges: {},
+              };
+            }
+
+            symbols[normalizedSymbol].exchanges[exchangeSlug] = ticker;
+          } catch {
+            this.logger.warn(`Invalid ticker JSON for key ${key}`);
+          }
+        }),
+      );
+    }),
+  );
+
+  return {
+    count: Object.keys(symbols).length,
+    symbols: Object.values(symbols),
+  };
+}
+
 }

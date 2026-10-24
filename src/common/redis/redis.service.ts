@@ -49,4 +49,26 @@ export class RedisService {
       return false;
     }
   }
+
+
+async scanKeys(pattern: string): Promise<string[]> {
+  const keys: string[] = [];
+  let cursor = '0';
+
+  do {
+    const [nextCursor, batch] = await this.client.scan(
+      cursor,
+      'MATCH',
+      pattern,
+      'COUNT',
+      500,
+    );
+
+    keys.push(...batch);
+    cursor = nextCursor;
+  } while (cursor !== '0');
+
+  return keys;
+}
+
 }

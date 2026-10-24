@@ -48,6 +48,9 @@ export class ReconnectingWsClient {
     const timeout = setTimeout(() => {
       if (settled) return;
 
+      settled = true;
+      this.healthy = false;
+
       console.error(
         '🔥🔥 WEBSOCKET TIMEOUT:',
         this.options.url,

@@ -216,4 +216,11 @@ const isPublicOnly = !config.apiKey || config.accountId?.startsWith('public-mark
         locked: parseFloat(c.walletBalance) - parseFloat(c.availableToWithdraw),
       }));
   }
+
+
+  async getMarketSymbols(): Promise<string[]> {
+    return this.rest.getMarketSymbols();
+  }
+
+
 }

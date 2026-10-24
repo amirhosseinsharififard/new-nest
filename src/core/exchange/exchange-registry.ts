@@ -1,98 +1,73 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+
+import { Injectable, Logger } from '@nestjs/common';
 import { IExchangeAdapter } from './exchange-adapter.interface';
-
-type AdapterFactory = (config: ExchangeAccountConfig) => IExchangeAdapter;
-// اصلاح:
-
-
 
 export interface ExchangeAccountConfig {
   accountId: string;
   exchangeId: string;
-  // apiKey/apiSecret برای اکثر CEX ها (Binance, Bybit, ...)
   apiKey?: string;
   apiSecret?: string;
-  // passphrase اضافی که برخی صرافی‌ها (مثلا OKX) نیاز دارند
   passphrase?: string;
-  // برای DEX هایی که با کیف‌پول (نه apiKey/apiSecret) کار می‌کنند
   publicKey?: string;
   privateKey?: string;
   restBaseUrl: string;
   wsBaseUrl: string;
 }
 
+type AdapterFactory = (
+  config: ExchangeAccountConfig,
+) => IExchangeAdapter;
 
-/**
- * Registry مرکزی صرافی‌ها.
- *
- * نحوه اضافه کردن صرافی جدید:
- * 1. یک Adapter جدید در پوشه adapters/ بساز که IExchangeAdapter رو پیاده کنه
- * 2. در فایل adapters/index.ts یک خط اضافه کن: registry.register('okx', OkxAdapter)
- * 3. یک رکورد در جدول exchanges دیتابیس اضافه کن
- *
- * هیچ تغییری در ArbitrageEngine یا سایر بخش‌های Core لازم نیست.
- */
 @Injectable()
 export class ExchangeRegistry {
   private readonly logger = new Logger(ExchangeRegistry.name);
 
-  // نگاشت نام صرافی -> تابع سازنده Adapter
-  private factories = new Map<string, AdapterFactory>();
+  private readonly factories = new Map<string, AdapterFactory>();
 
-  // نمونه‌های فعال Adapter، به تفکیک هر Account
-  // کلید: `${exchangeId}:${accountId}`
-  private activeInstances = new Map<string, IExchangeAdapter>();
+  private readonly activeInstances = new Map<
+    string,
+    IExchangeAdapter
+  >();
 
-  /**
-   * ثبت یک نوع صرافی جدید در سیستم.
-   * این متد در فایل bootstrap صدا زده میشه، نه در Core Logic.
-   */
   register(exchangeId: string, factory: AdapterFactory): void {
-    if (this.factories.has(exchangeId)) {
-      this.logger.warn(`Exchange "${exchangeId}" قبلا ثبت شده، بازنویسی می‌شود`);
-    }
-    this.factories.set(exchangeId, factory);
-    this.logger.log(`Exchange adapter ثبت شد: ${exchangeId}`);
-  }
+    const normalizedId = exchangeId.toLowerCase();
 
-  /**
-   * ساخت یا برگرداندن نمونه Adapter برای یک اکانت خاص.
-   * هر اکانت (حتی از یک صرافی) نمونه جدای خودش رو داره
-   * چون API Key متفاوت و اتصال WebSocket جدا نیاز داره.
-   */
-  getInstance(config: ExchangeAccountConfig): IExchangeAdapter {
-  const key = `${config.exchangeId}:${config.accountId}`;
-  const existing = this.activeInstances.get(key);
-
-  // console.log('========== GET INSTANCE ==========');
-  // console.log('exchangeId:', config.exchangeId);
-  // console.log('accountId:', config.accountId);
-  // console.log('key:', key);
-  // console.log('existing:', existing);
-
-  if (existing) {
-    console.log('✅ RETURN EXISTING ADAPTER');
-    return existing;
-  }
-
-  const factory = this.factories.get(config.exchangeId);
-
-  console.log('factory:', factory);
-
-  if (!factory) {
-    throw new Error(
-      `صرافی "${config.exchangeId}" ثبت نشده. ابتدا Adapter آن را register کنید.`,
-    );
-  }
-
-    if (!factory) {
-      throw new Error(
-        `صرافی "${config.exchangeId}" ثبت نشده. ابتدا Adapter آن را register کنید.`,
+    if (this.factories.has(normalizedId)) {
+      this.logger.warn(
+        `Adapter "${normalizedId}" is already registered; replacing it.`,
       );
     }
 
-    const instance = factory(config);
+    this.factories.set(normalizedId, factory);
+
+    this.logger.log(`Exchange adapter registered: ${normalizedId}`);
+  }
+
+  getInstance(config: ExchangeAccountConfig): IExchangeAdapter {
+    const exchangeId = config.exchangeId.toLowerCase();
+    const key = `${exchangeId}:${config.accountId}`;
+
+    const existing = this.activeInstances.get(key);
+
+    if (existing) {
+      return existing;
+    }
+
+    const factory = this.factories.get(exchangeId);
+
+    if (!factory) {
+      throw new Error(
+        `Exchange "${exchangeId}" is not registered. Register its adapter first.`,
+      );
+    }
+
+    const instance = factory({
+      ...config,
+      exchangeId,
+    });
+
     this.activeInstances.set(key, instance);
+
     return instance;
   }
 
@@ -101,9 +76,20 @@ export class ExchangeRegistry {
   }
 
   async disconnectAll(): Promise<void> {
-    for (const instance of this.activeInstances.values()) {
-      await instance.disconnectWebSocket();
-    }
+    const instances = Array.from(this.activeInstances.values());
+
     this.activeInstances.clear();
+
+    const results = await Promise.allSettled(
+      instances.map((instance) => instance.disconnectWebSocket()),
+    );
+
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        this.logger.error(
+          `Error disconnecting adapter: ${String(result.reason)}`,
+        );
+      }
+    }
   }
 }

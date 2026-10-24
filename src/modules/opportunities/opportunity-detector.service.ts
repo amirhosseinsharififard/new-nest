@@ -15,6 +15,9 @@ import { ArbitrageOpportunity, OpportunityOutcome } from './entities/arbitrage-o
 import { ArbitrageStrategy } from '../strategies/entities/arbitrage-strategy.entity';
 import { isSpreadProfitable } from '../market-data/spread-calculation.util';
 
+
+
+
 /** How often to check all active strategies (Fallback; Main path is Event-driven) */
 export const OPPORTUNITY_CHECK_INTERVAL_MS = 5000;
 
@@ -84,15 +87,31 @@ export class OpportunityDetectorService {
    * Uses the cached strategies to avoid DB queries.
    */
   @OnEvent(TICKER_UPDATED_EVENT)
-  async onTickerUpdated(payload: TickerUpdatedPayload): Promise<void> {
+  async onTickerUpdated(
+    payload: TickerUpdatedPayload,
+  ): Promise<void> {
+    const symbol = payload.symbol
+      .replace(/[\/_-]/g, '')
+      .toUpperCase();
+
+    const exchangeSlug = payload.exchangeSlug.toLowerCase();
+
     const matchingStrategies = this.activeStrategiesCache.filter(
-      (s) =>
-        s.symbol === payload.symbol &&
-        (s.exchangeA.slug === payload.exchangeSlug || s.exchangeB.slug === payload.exchangeSlug),
+      (strategy) =>
+        strategy.symbol.replace(/[\/_-]/g, '').toUpperCase() === symbol &&
+        (
+          strategy.exchangeA.slug.toLowerCase() === exchangeSlug ||
+          strategy.exchangeB.slug.toLowerCase() === exchangeSlug
+        ),
     );
 
-    await Promise.all(matchingStrategies.map((strategy) => this.checkStrategyGuarded(strategy)));
+    await Promise.all(
+      matchingStrategies.map((strategy) =>
+        this.checkStrategyGuarded(strategy),
+      ),
+    );
   }
+
 
   /** Guards against concurrent checks of the same strategy */
   private async checkStrategyGuarded(strategy: ArbitrageStrategy): Promise<void> {
@@ -228,4 +247,6 @@ export class OpportunityDetectorService {
 
     await this.opportunityRepo.save(record);
   }
+
+
 }

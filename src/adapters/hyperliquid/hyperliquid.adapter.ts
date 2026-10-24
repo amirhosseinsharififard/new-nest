@@ -224,4 +224,8 @@ subscribeTickers(
       },
     ];
   }
+
+  async getMarketSymbols(): Promise<string[]> {
+  return this.info.getMarketSymbols();
+}
 }

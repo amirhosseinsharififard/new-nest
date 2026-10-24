@@ -1,3 +1,4 @@
+
 import {
   Injectable,
   Logger,
@@ -23,8 +24,6 @@ export class MarketDataSubscriptionService
     MarketDataSubscriptionService.name,
   );
 
-  private readonly symbols = ['BTC-USDT'];
-
   constructor(
     @InjectRepository(Exchange)
     private readonly exchangeRepository: Repository<Exchange>,
@@ -32,23 +31,16 @@ export class MarketDataSubscriptionService
     private readonly exchangeRegistry: ExchangeRegistry,
 
     private readonly priceAggregatorService: PriceAggregatorService,
-  ) {
-    this.logger.log('MarketDataSubscriptionService constructed');
-  }
+  ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    this.logger.log(
-      '========== MARKET DATA BOOTSTRAP ==========',
-    );
-
+    this.logger.log('========== MARKET DATA BOOTSTRAP ==========');
     await this.startSubscriptions();
   }
 
   async startSubscriptions(): Promise<void> {
     const exchanges = await this.exchangeRepository.find({
-      where: {
-        isActive: true,
-      },
+      where: { isActive: true },
     });
 
     this.logger.log(
@@ -62,36 +54,56 @@ export class MarketDataSubscriptionService
     );
 
     for (const exchange of exchanges) {
-      for (const symbol of this.symbols) {
-        try {
-          const config: ExchangeAccountConfig = {
-            accountId: `public-market-data:${exchange.slug}`,
-            exchangeId: exchange.slug,
-            restBaseUrl: exchange.restBaseUrl,
-            wsBaseUrl: exchange.wsBaseUrl,
-          };
+      const config: ExchangeAccountConfig = {
+        accountId: `public-market-data:${exchange.slug}`,
+        exchangeId: exchange.slug,
+        restBaseUrl: exchange.restBaseUrl,
+        wsBaseUrl: exchange.wsBaseUrl,
+      };
 
-          this.logger.log(
-            `SUBSCRIBE START -> ${exchange.slug} -> ${symbol}`,
-          );
+      try {
+        this.logger.log(
+          `Discovering market symbols: ${exchange.slug}`,
+        );
 
-          this.priceAggregatorService.watchSymbol(
-            config,
-            symbol,
-          );
+        const adapter = this.exchangeRegistry.getInstance(config);
 
-          this.logger.log(
-            `SUBSCRIBE DONE -> ${exchange.slug} -> ${symbol}`,
+        if (!adapter.getMarketSymbols) {
+          this.logger.warn(
+            `${exchange.slug}: getMarketSymbols() is not implemented`,
           );
-        } catch (error) {
-          this.logger.error(
-            `SUBSCRIBE FAILED -> ${exchange.slug} -> ${symbol} -> ${
-              error instanceof Error
-                ? error.message
-                : String(error)
-            }`,
-          );
+          continue;
         }
+
+        const symbols = await adapter.getMarketSymbols();
+
+        if (!symbols.length) {
+          this.logger.warn(
+            `${exchange.slug}: no market symbols discovered`,
+          );
+          continue;
+        }
+
+        this.logger.log(
+          `${exchange.slug}: discovered ${symbols.length} symbols`,
+        );
+
+        this.priceAggregatorService.watchSymbols(
+          config,
+          symbols,
+        );
+
+        this.logger.log(
+          `${exchange.slug}: subscription requested for ${symbols.length} symbols`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `${exchange.slug}: market subscription failed: ${
+            error instanceof Error
+              ? error.message
+              : String(error)
+          }`,
+        );
       }
     }
   }

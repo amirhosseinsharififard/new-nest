@@ -112,7 +112,7 @@ private readonly rest: BinanceRestClient | null;
     });
   }
 
-  
+
 
 
   subscribePositionUpdates(

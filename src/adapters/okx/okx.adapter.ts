@@ -239,4 +239,8 @@ export class OkxAdapter implements IExchangeAdapter {
         locked: parseFloat(d.frozenBal),
       }));
   }
+
+  async getMarketSymbols(): Promise<string[]> {
+  return this.rest.getMarketSymbols();
+}
 }
