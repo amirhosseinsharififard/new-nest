@@ -23,7 +23,7 @@ export class MarketDataController {
     private readonly exchangeRepository: Repository<Exchange>,
   ) {}
 
-    @Get('spread')
+  @Get('spread')
   async getSpread(
     @Query('symbol') symbol: string,
     @Query('exchangeA') exchangeA: string,
@@ -57,17 +57,17 @@ export class MarketDataController {
       },
     });
 
-    const result: Record<string, any> = {};
-    console.log(exchanges)
-   for (const exchange of exchanges) {
-  const ticker = await this.spreadCalculator.getCachedTicker(
-    exchange.slug,
-    symbol,
-  );
-  result[exchange.slug] = ticker;
-  console.log(result)
+      const result: Record<string, any> = {};
+      console.log(exchanges)
+      for (const exchange of exchanges) {
+      const ticker = await this.spreadCalculator.getCachedTicker(
+        exchange.slug,
+        symbol,
+      );
+      result[exchange.slug] = ticker;
+      console.log(result)
 
-  }
+      }
 
     return {
       symbol,
@@ -77,18 +77,20 @@ export class MarketDataController {
 
 
 
-@Get('live/all')
-async getAllLiveMarket() {
-  const exchanges = await this.exchangeRepository.find({
-    where: {
-      isActive: true,
-    },
-  });
+  @Get('live/all')
+  async getAllLiveMarket() {
+    const exchanges = await this.exchangeRepository.find({
+      where: { isActive: true },
+    });
 
-  return this.spreadCalculator.getAllLiveMarketData(
-    exchanges.map((exchange) => exchange.slug),
-  );
-}
+    const data = await this.spreadCalculator.getAllLiveMarketData(
+      exchanges.map((exchange) => exchange.slug),
+    );
+
+    console.dir(data, { depth: null });
+
+    return data;
+  }
 
 
 

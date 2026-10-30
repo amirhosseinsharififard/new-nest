@@ -29,7 +29,8 @@ import { mapBinanceOrderStatus, toBinanceSymbol } from './binance.mapper';
 export class BinanceAdapter implements IExchangeAdapter {
   readonly exchangeId = 'binance';
   private readonly logger = new Logger(BinanceAdapter.name);
-private readonly rest: BinanceRestClient | null;
+  private readonly rest: BinanceRestClient | null;
+  private readonly marketDataRest: BinanceRestClient;
   private readonly wsManager: BinanceWsManager;
 
  constructor(private readonly config: ExchangeAccountConfig) {
@@ -44,6 +45,11 @@ private readonly rest: BinanceRestClient | null;
   } else {
     this.rest = null;
   }
+
+  this.marketDataRest = new BinanceRestClient(
+    { apiKey: '', apiSecret: '' },
+    config.restBaseUrl,
+  );
 
   this.wsManager = new BinanceWsManager(
     this.rest,
@@ -256,5 +262,9 @@ private readonly rest: BinanceRestClient | null;
         free: parseFloat(b.availableBalance),
         locked: parseFloat(b.balance) - parseFloat(b.availableBalance),
       }));
+  }
+
+  async getMarketSymbols(): Promise<string[]> {
+  return this.marketDataRest.getMarketSymbols();
   }
 }

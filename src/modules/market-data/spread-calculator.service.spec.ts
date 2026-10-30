@@ -15,7 +15,14 @@ describe('SpreadCalculatorService', () => {
     client = new RedisMock();
     redisService = new RedisService(client);
     eventEmitter = { emit: jest.fn() };
-  service = new SpreadCalculatorService(redisService);
+ const marketHistoryService = {
+  recordTicker: jest.fn().mockResolvedValue(undefined),
+};
+
+service = new SpreadCalculatorService(
+  redisService,
+  marketHistoryService as any,
+);
   });
 
   afterEach(async () => {

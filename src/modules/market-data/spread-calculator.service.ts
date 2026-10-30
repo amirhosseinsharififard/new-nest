@@ -6,6 +6,7 @@ import {
   calculateSpread,
   SpreadResult,
 } from './spread-calculation.util';
+import { MarketHistoryService } from './services/market-history.service';
 
 /** Redis key: price:<exchange>:<normalized-symbol> */
 export function buildPriceCacheKey(
@@ -33,7 +34,9 @@ export interface TickerUpdatedPayload {
 export class SpreadCalculatorService {
   private readonly logger = new Logger(SpreadCalculatorService.name);
 
-  constructor(private readonly redisService: RedisService) {}
+  constructor(private readonly redisService: RedisService,
+      private readonly marketHistoryService: MarketHistoryService,
+  ) {}
 
   async cacheTicker(
     exchangeSlug: string,
@@ -41,13 +44,16 @@ export class SpreadCalculatorService {
   ): Promise<void> {
     const key = buildPriceCacheKey(exchangeSlug, ticker.symbol);
 
-    await this.redisService.set(
-      key,
-      JSON.stringify(ticker),
-      PRICE_CACHE_TTL_SECONDS,
-    );
+    await Promise.all([
+      this.marketHistoryService.recordTicker(exchangeSlug, ticker),
+      this.redisService.set(
+        key,
+        JSON.stringify(ticker),
+        PRICE_CACHE_TTL_SECONDS,
+      ),
+    ]);
 
-    this.logger.debug(`Cached ticker: ${key}`);
+    // this.logger.debug(`Cached ticker: ${key}`);
   }
 
   async getCachedTicker(
@@ -103,56 +109,122 @@ export class SpreadCalculatorService {
   }
 
 
-async getAllLiveMarketData(exchangeSlugs: string[]) {
-  const symbols: Record<
-    string,
-    {
-      symbol: string;
-      exchanges: Record<string, TickerData>;
-    }
-  > = {};
 
-  await Promise.all(
-    exchangeSlugs.map(async (exchangeSlug) => {
-      const keys = await this.redisService.scanKeys(
-        `price:${exchangeSlug.toLowerCase()}:*`,
-      );
+  async getAllLiveMarketData(exchangeSlugs: string[]) {
+    const symbols: Record<
+      string,
+      {
+        symbol: string;
+        exchanges: Record<string, TickerData>;
+      }
+    > = {};
 
-      await Promise.all(
-        keys.map(async (key) => {
-          const raw = await this.redisService.get(key);
+    await Promise.all(
+      exchangeSlugs.map(async (exchangeSlug) => {
+        const keys = await this.redisService.scanKeys(
+          `price:${exchangeSlug.toLowerCase()}:*`,
+        );
 
-          if (!raw) return;
+        await Promise.all(
+          keys.map(async (key) => {
+            const raw = await this.redisService.get(key);
+            if (!raw) return;
 
-          try {
-            const ticker = JSON.parse(raw) as TickerData;
+            try {
+              const ticker = JSON.parse(raw) as TickerData;
+              if (!ticker?.symbol) return;
 
-            if (!ticker?.symbol) return;
+              const normalizedSymbol = ticker.symbol
+                .replace(/[\/_-]/g, '')
+                .toUpperCase();
 
-            const normalizedSymbol = ticker.symbol
-              .replace(/[\/_-]/g, '')
-              .toUpperCase();
+              if (!symbols[normalizedSymbol]) {
+                symbols[normalizedSymbol] = {
+                  symbol: ticker.symbol,
+                  exchanges: {},
+                };
+              }
 
-            if (!symbols[normalizedSymbol]) {
-              symbols[normalizedSymbol] = {
-                symbol: ticker.symbol,
-                exchanges: {},
-              };
+              symbols[normalizedSymbol].exchanges[exchangeSlug] = ticker;
+            } catch {
+              this.logger.warn(`Invalid ticker JSON for key ${key}`);
             }
+          }),
+        );
+      }),
+    );
 
-            symbols[normalizedSymbol].exchanges[exchangeSlug] = ticker;
-          } catch {
-            this.logger.warn(`Invalid ticker JSON for key ${key}`);
-          }
-        }),
+    const result = Object.values(symbols).map((item) => {
+      const exchanges = Object.entries(item.exchanges);
+
+      const comparisons = exchanges.flatMap(([exchangeA, tickerA], i) =>
+        exchanges.slice(i + 1).flatMap(([exchangeB, tickerB]) =>
+          [
+            {
+              buyExchange: exchangeA,
+              sellExchange: exchangeB,
+              buyTicker: tickerA,
+              sellTicker: tickerB,
+            },
+            {
+              buyExchange: exchangeB,
+              sellExchange: exchangeA,
+              buyTicker: tickerB,
+              sellTicker: tickerA,
+            },
+          ]
+            .map(({ buyExchange, sellExchange, buyTicker, sellTicker }) => {
+              const buyPrice = Number(buyTicker.askPrice);
+              const sellPrice = Number(sellTicker.bidPrice);
+              const buyAskSize = Number(buyTicker.askSize);
+              const sellBidSize = Number(sellTicker.bidSize);
+
+              if (
+                !Number.isFinite(buyPrice) ||
+                !Number.isFinite(sellPrice) ||
+                !Number.isFinite(buyAskSize) ||
+                !Number.isFinite(sellBidSize) ||
+                buyPrice <= 0 ||
+                sellPrice <= 0 ||
+                buyAskSize <= 0 ||
+                sellBidSize <= 0
+              ) {
+                return null;
+              }
+
+              const priceDifference = sellPrice - buyPrice;
+
+              return {
+                buyExchange,
+                sellExchange,
+                buyPrice,
+                sellPrice,
+                priceDifference,
+                spreadPercent: (priceDifference / buyPrice) * 100,
+                availableSize: Math.min(buyAskSize, sellBidSize),
+                buyAskSize,
+                sellBidSize,
+              };
+            })
+            .filter((comparison) => comparison !== null),
+        ),
       );
-    }),
-  );
 
-  return {
-    count: Object.keys(symbols).length,
-    symbols: Object.values(symbols),
-  };
-}
+      // Best price spread first
+      comparisons.sort((a, b) => b.spreadPercent - a.spreadPercent);
+
+      return {
+        symbol: item.symbol,
+        exchanges: item.exchanges,
+        comparisons,
+      };
+    });
+
+    return {
+      count: result.length,
+      symbols: result,
+    };
+  }
+
 
 }

@@ -172,4 +172,29 @@ export class BinanceRestClient {
   async keepAliveListenKey() {
     return this.signedRequest<Record<string, never>>('PUT', '/fapi/v1/listenKey');
   }
+
+  async getMarketSymbols(): Promise<string[]> {
+  const response = await this.publicRequest<{
+    symbols: Array<{
+      symbol: string;
+      baseAsset: string;
+      quoteAsset: string;
+      contractType: string;
+      status: string;
+    }>;
+  }>('/fapi/v1/exchangeInfo');
+
+  return [
+    ...new Set(
+      response.symbols
+        .filter(
+          (item) =>
+            item.status === 'TRADING' &&
+            item.contractType === 'PERPETUAL' &&
+            item.quoteAsset === 'USDT',
+        )
+        .map((item) => `${item.baseAsset}-USDT`),
+    ),
+  ];
+}
 }
