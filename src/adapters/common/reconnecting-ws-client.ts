@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import WebSocket from 'ws';
+import WebSocket = require('ws');
 
 interface ReconnectingWsOptions {
   url: string;
@@ -32,42 +32,131 @@ export class ReconnectingWsClient {
   }
 
   connect(): Promise<void> {
-    this.isManuallyClosed = false;
-    return new Promise((resolve, reject) => {
+  // console.log(
+  //   '🔥 CONNECT CALLED:',
+  //   this.options.exchangeId,
+  //   this.options.url,
+  // );
+
+  this.isManuallyClosed = false;
+
+  return new Promise((resolve, reject) => {
+    // console.log('🔥 BEFORE NEW WEBSOCKET');
+
+    let settled = false;
+
+    const timeout = setTimeout(() => {
+      if (settled) return;
+
+      settled = true;
+      this.healthy = false;
+
+      console.error(
+        '🔥🔥 WEBSOCKET TIMEOUT:',
+        this.options.url,
+      );
+
+      this.ws?.terminate();
+
+      reject(
+        new Error(
+          `WebSocket connection timeout: ${this.options.url}`,
+        ),
+      );
+    }, 10_000);
+
+    try {
       this.ws = new WebSocket(this.options.url);
 
+      // console.log('🔥 AFTER NEW WEBSOCKET');
+
       const onOpenOnce = () => {
+        if (settled) return;
+
+        settled = true;
+        clearTimeout(timeout);
+
         this.healthy = true;
         this.reconnectAttempts = 0;
+
+        // console.log(
+        //   '🔥🔥🔥 WEBSOCKET OPEN:',
+        //   this.options.url,
+        // );
+
         this.logger.log('اتصال WebSocket برقرار شد');
+
         this.startPing();
         this.options.onOpen?.();
+
         resolve();
       };
 
       this.ws.once('open', onOpenOnce);
-      this.ws.on('message', (data) => this.options.onMessage(data));
 
-      this.ws.on('close', () => {
-        this.healthy = false;
-        this.stopPing();
-        if (!this.isManuallyClosed) {
-          this.logger.warn('اتصال WebSocket قطع شد، تلاش برای اتصال مجدد...');
-          this.scheduleReconnect();
-        }
+      this.ws.on('message', (data) => {
+        // console.log('🔥 WEBSOCKET MESSAGE RECEIVED');
+
+        this.options.onMessage(data);
       });
 
       this.ws.on('error', (err) => {
+        console.error(
+          '🔥🔥 WEBSOCKET ERROR:',
+          err.message,
+        );
+
         this.healthy = false;
-        this.logger.error(`خطای WebSocket: ${err.message}`);
-        // در صورت خطای اولیه (قبل از open)، Promise رو reject کن
-        // تا caller بفهمه اتصال اولیه شکست خورده
-        if (this.reconnectAttempts === 0) {
+
+        this.logger.error(
+          `خطای WebSocket: ${err.message}`,
+        );
+
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
           reject(err);
         }
       });
-    });
-  }
+
+      this.ws.on('unexpected-response', (_request, response) => {
+        console.error(
+          '🔥🔥 UNEXPECTED RESPONSE:',
+          response.statusCode,
+          response.statusMessage,
+        );
+      });
+
+      this.ws.on('close', (code, reason) => {
+        console.log(
+          '🔥 WEBSOCKET CLOSE:',
+          code,
+          reason.toString(),
+        );
+
+        this.healthy = false;
+        this.stopPing();
+
+        if (!this.isManuallyClosed) {
+          this.logger.warn(
+            'اتصال WebSocket قطع شد، تلاش برای اتصال مجدد...',
+          );
+
+          this.scheduleReconnect();
+        }
+      });
+    } catch (err) {
+      clearTimeout(timeout);
+
+      console.error(
+        '🔥🔥 WEBSOCKET CONSTRUCTOR ERROR:',
+        err,
+      );
+
+      reject(err);
+    }
+  });
+}
 
   private scheduleReconnect(): void {
     this.reconnectAttempts += 1;

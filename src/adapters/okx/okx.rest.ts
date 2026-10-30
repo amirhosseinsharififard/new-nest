@@ -150,4 +150,43 @@ export class OkxRestClient {
       data: { state: string; accFillSz: string; avgPx: string }[];
     }>('GET', '/api/v5/trade/order', { instId, ordId });
   }
+  
+  async getMarketSymbols(): Promise<string[]> {
+  await this.rateLimiter.acquire();
+
+  const response = await this.http.get('/api/v5/public/instruments', {
+    params: { instType: 'SWAP' },
+  });
+
+  const result = response.data;
+
+  if (result.code !== '0') {
+    throw new ExchangeError(
+      'okx',
+      'UNKNOWN',
+      `OKX instruments error: ${result.msg}`,
+    );
+  }
+
+  const instruments = result.data as Array<{
+    instId: string;
+    instType: string;
+    settleCcy: string;
+    state: string;
+  }>;
+
+  return [
+    ...new Set(
+      instruments
+        .filter(
+          (item) =>
+            item.instType === 'SWAP' &&
+            item.settleCcy === 'USDT' &&
+            item.state === 'live' &&
+            item.instId.endsWith('-USDT-SWAP'),
+        )
+        .map((item) => item.instId.replace(/-SWAP$/, '')),
+    ),
+  ];
+}
 }

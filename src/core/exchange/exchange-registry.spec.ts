@@ -13,16 +13,24 @@ import {
 // یک Adapter جعلی برای تست، بدون نیاز به اتصال واقعی به هیچ صرافی
 class FakeAdapter implements IExchangeAdapter {
   readonly exchangeId = 'fake-exchange';
-  connectWebSocket = jest.fn().mockResolvedValue(undefined);
-  disconnectWebSocket = jest.fn().mockResolvedValue(undefined);
-  isWebSocketHealthy = jest.fn().mockReturnValue(true);
+
+  connectWebSocket = jest.fn();
+  disconnectWebSocket = jest.fn();
+  isWebSocketHealthy = jest.fn();
+
+  // --- Old methods ---
   subscribeTicker = jest.fn();
   unsubscribeTicker = jest.fn();
+
+  // --- New batch methods (Add these!) ---
+  subscribeTickers = jest.fn();
+  unsubscribeTickers = jest.fn();
+
   subscribePositionUpdates = jest.fn();
-  openPosition = jest.fn() as unknown as (p: OpenPositionParams) => Promise<OrderResult>;
-  closePosition = jest.fn() as unknown as (p: ClosePositionParams) => Promise<OrderResult>;
-  getPositionStatus = jest.fn() as unknown as (a: string, s: string) => Promise<PositionStatus>;
-  getBalance = jest.fn() as unknown as (a: string) => Promise<Balance[]>;
+  openPosition = jest.fn();
+  closePosition = jest.fn();
+  getPositionStatus = jest.fn();
+  getBalance = jest.fn();
 }
 
 describe('ExchangeRegistry', () => {

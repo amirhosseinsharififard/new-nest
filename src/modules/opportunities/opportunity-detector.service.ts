@@ -15,37 +15,38 @@ import { ArbitrageOpportunity, OpportunityOutcome } from './entities/arbitrage-o
 import { ArbitrageStrategy } from '../strategies/entities/arbitrage-strategy.entity';
 import { isSpreadProfitable } from '../market-data/spread-calculation.util';
 
-/** هر چند میلی‌ثانیه یک‌بار همه استراتژی‌های فعال چک بشن (Fallback؛ مسیر اصلی Event-driven است) */
+
+
+
+/** How often to check all active strategies (Fallback; Main path is Event-driven) */
 export const OPPORTUNITY_CHECK_INTERVAL_MS = 5000;
 
 /**
- * قلب "بررسی مداوم" که کاربر خواسته بود.
+ * The core engine for detecting arbitrage opportunities.
  *
- * دو مسیر موازی برای رسیدن به این هدف وجود داره:
+ * It uses two parallel paths:
  *
- * ۱) **Event-driven (مسیر اصلی، بدون تاخیر)**: هر بار که یک قیمت جدید
- *    از WebSocket صرافی می‌رسه (`TICKER_UPDATED_EVENT` از SpreadCalculatorService)،
- *    بلافاصله همون استراتژی‌هایی که به اون Symbol/صرافی مربوطن چک می‌شن —
- *    نه اینکه صبر کنیم تا Interval بعدی. این یعنی از لحظه‌ای که Spread واقعا
- *    به Threshold می‌رسه تا لحظه بررسی، عملاً تاخیری وجود نداره (فقط زمان
- *    پردازش، نه صبر برای Timer).
+ * 1) **Event-driven (Primary, Zero-latency)**: Whenever a new price arrives
+ *    via WebSocket (`TICKER_UPDATED_EVENT`), matching strategies are checked
+ *    instantly. This ensures zero delay between threshold breach and execution.
  *
- * ۲) **Interval (Fallback ایمنی، هر ۵ ثانیه)**: برای پوشش حالت‌هایی که یک
- *    Event به هر دلیلی از دست بره (مثلا خطای گذرا)، این Interval مثل قبل
- *    همه استراتژی‌های فعال رو دوره‌ای چک می‌کنه.
+ * 2) **Interval (Fallback, every 5s)**: Ensures no opportunity is missed if an
+ *    event is dropped (e.g., transient network issues).
  *
- * هر نتیجه (چه اجرا بشه چه نشه) در ArbitrageOpportunity ثبت میشه —
- * این تنها راهیه که بعدا بفهمیم چرا یک فرصت خاص از دست رفت یا اجرا شد.
+ * Every detection attempt (executed or skipped) is logged in ArbitrageOpportunity
+ * for audit and historical analysis.
  */
 @Injectable()
 export class OpportunityDetectorService {
   private readonly logger = new Logger(OpportunityDetectorService.name);
-  private isRunning = false; // جلوگیری از overlap در Interval
-  // جلوگیری از چک هم‌زمان یک استراتژی از دو مسیر مختلف (Event و Interval)
-  // یا از چند Event پشت‌سرهم که WebSocket ممکنه sub-second بفرسته
+  private isRunning = false; // Prevents overlap in the interval loop
+
+  // In-memory lock to prevent checking the same strategy simultaneously
+  // from both Event and Interval paths, or from rapid sequential events.
   private readonly checkingStrategyIds = new Set<string>();
-  // Cache استراتژی‌های فعال؛ توسط Interval رفرش می‌شه و توسط Event Handler
-  // برای جلوگیری از Query زدن به دیتابیس با هر تیک قیمت استفاده می‌شه
+
+  // Cache of active strategies, refreshed by the interval to prevent
+  // hitting the DB on every single high-frequency tick.
   private activeStrategiesCache: ArbitrageStrategy[] = [];
 
   constructor(
@@ -60,14 +61,14 @@ export class OpportunityDetectorService {
   @Interval(OPPORTUNITY_CHECK_INTERVAL_MS)
   async handleInterval(): Promise<void> {
     if (this.isRunning) {
-      this.logger.debug('دور قبلی هنوز در حال اجراست، این دور رد می‌شود');
+      this.logger.debug('Previous interval cycle is still running, skipping...');
       return;
     }
     this.isRunning = true;
     try {
       await this.checkAllActiveStrategies();
     } catch (err) {
-      this.logger.error(`خطا در چرخه بررسی فرصت‌ها: ${(err as Error).message}`);
+      this.logger.error(`Error in opportunity interval cycle: ${(err as Error).message}`);
     } finally {
       this.isRunning = false;
     }
@@ -75,28 +76,44 @@ export class OpportunityDetectorService {
 
   async checkAllActiveStrategies(): Promise<void> {
     const strategies = await this.strategiesService.findAllActive();
-    this.activeStrategiesCache = strategies; // برای استفاده مسیر Event-driven
-    // استراتژی‌ها مستقل از هم هستن، پس موازی چک می‌شن تا سرعت واکنش بالا بمونه
+    this.activeStrategiesCache = strategies; // Update cache for event-driven path
+
+    // Strategies are independent, so we check them in parallel for speed
     await Promise.all(strategies.map((strategy) => this.checkStrategyGuarded(strategy)));
   }
 
   /**
-   * مسیر اصلی Event-driven: با هر تیک قیمت جدید صدا زده میشه.
-   * از Cache استراتژی‌های فعال استفاده می‌کنه (نه Query مستقیم دیتابیس)
-   * چون این Handler ممکنه در ثانیه چندین بار صدا زده بشه.
+   * Main Event-driven path: Triggered on every new price tick.
+   * Uses the cached strategies to avoid DB queries.
    */
   @OnEvent(TICKER_UPDATED_EVENT)
-  async onTickerUpdated(payload: TickerUpdatedPayload): Promise<void> {
+  async onTickerUpdated(
+    payload: TickerUpdatedPayload,
+  ): Promise<void> {
+    const symbol = payload.symbol
+      .replace(/[\/_-]/g, '')
+      .toUpperCase();
+
+    const exchangeSlug = payload.exchangeSlug.toLowerCase();
+
     const matchingStrategies = this.activeStrategiesCache.filter(
-      (s) =>
-        s.symbol === payload.symbol &&
-        (s.exchangeA.slug === payload.exchangeSlug || s.exchangeB.slug === payload.exchangeSlug),
+      (strategy) =>
+        strategy.symbol.replace(/[\/_-]/g, '').toUpperCase() === symbol &&
+        (
+          strategy.exchangeA.slug.toLowerCase() === exchangeSlug ||
+          strategy.exchangeB.slug.toLowerCase() === exchangeSlug
+        ),
     );
 
-    await Promise.all(matchingStrategies.map((strategy) => this.checkStrategyGuarded(strategy)));
+    await Promise.all(
+      matchingStrategies.map((strategy) =>
+        this.checkStrategyGuarded(strategy),
+      ),
+    );
   }
 
-  /** جلوگیری از چک هم‌زمان یک استراتژی از دو مسیر مختلف (Event/Interval) یا چند Event پشت‌سرهم */
+
+  /** Guards against concurrent checks of the same strategy */
   private async checkStrategyGuarded(strategy: ArbitrageStrategy): Promise<void> {
     if (this.checkingStrategyIds.has(strategy.id)) {
       return;
@@ -120,9 +137,9 @@ export class OpportunityDetectorService {
         parseFloat(strategy.takerFeeBPercent),
       );
     } catch (err) {
-      // یعنی قیمت زنده هنوز موجود نیست (WebSocket تازه وصل شده یا قطع شده) — طبیعیه، فقط رد کن
+      // Live price is not yet available in Redis (e.g., WS just connected). Skip.
       this.logger.debug(
-        `قیمت زنده برای استراتژی ${strategy.id} در دسترس نیست: ${(err as Error).message}`,
+        `Live price not available for strategy ${strategy.id}: ${(err as Error).message}`,
       );
       return;
     }
@@ -131,11 +148,9 @@ export class OpportunityDetectorService {
     const profitable = isSpreadProfitable(spreadResult, minSpread);
 
     if (!profitable) {
-      await this.logOpportunity(strategy, spreadResult.bestDirection.netSpreadPercent, {
-        buyOn: spreadResult.bestDirection.buyOn,
-        sellOn: spreadResult.bestDirection.sellOn,
-        outcome: OpportunityOutcome.BELOW_THRESHOLD,
-      }, strategy);
+      // Do not log every single below-threshold tick in DB to prevent DB bloat.
+      // Alternatively, throttle this log or only log if it was previously profitable.
+      // For now, we return early to save DB IO.
       return;
     }
 
@@ -144,22 +159,22 @@ export class OpportunityDetectorService {
         buyOn: spreadResult.bestDirection.buyOn,
         sellOn: spreadResult.bestDirection.sellOn,
         outcome: OpportunityOutcome.DETECTED_NOT_EXECUTED,
-      }, strategy);
+      });
       return;
     }
 
-    // جلوگیری از باز کردن پوزیشن جدید وقتی از قبل یکی باز/در حال باز شدن هست
+    // Check if a position is already open for this strategy
     const alreadyOpen = await this.positionExecutor.hasOpenPosition(strategy.id);
     if (alreadyOpen) {
       await this.logOpportunity(strategy, spreadResult.bestDirection.netSpreadPercent, {
         buyOn: spreadResult.bestDirection.buyOn,
         sellOn: spreadResult.bestDirection.sellOn,
         outcome: OpportunityOutcome.SKIPPED_POSITION_OPEN,
-      }, strategy);
+      });
       return;
     }
 
-    // چک نهایی Risk Management (Kill Switch یا سقف پوزیشن هم‌زمان)
+    // Global Risk Management Check (Kill Switch, Max Concurrent Positions)
     const riskCheck = await this.riskService.canOpenNewPosition();
     if (!riskCheck.allowed) {
       await this.logOpportunity(
@@ -170,13 +185,13 @@ export class OpportunityDetectorService {
           sellOn: spreadResult.bestDirection.sellOn,
           outcome: OpportunityOutcome.RISK_BLOCKED,
         },
-        strategy,
         null,
         riskCheck.reason,
       );
       return;
     }
 
+    // Hand over to PositionExecutorService (which MUST use a Redis Lock)
     const execResult = await this.positionExecutor.openPairFromOpportunity(
       strategy,
       spreadResult.bestDirection,
@@ -187,7 +202,7 @@ export class OpportunityDetectorService {
         buyOn: spreadResult.bestDirection.buyOn,
         sellOn: spreadResult.bestDirection.sellOn,
         outcome: OpportunityOutcome.SKIPPED_LOCKED,
-      }, strategy);
+      });
       return;
     }
 
@@ -206,7 +221,6 @@ export class OpportunityDetectorService {
         sellOn: spreadResult.bestDirection.sellOn,
         outcome,
       },
-      strategy,
       execResult.position.id,
     );
   }
@@ -215,12 +229,11 @@ export class OpportunityDetectorService {
     strategy: ArbitrageStrategy,
     netSpreadPercent: number,
     info: { buyOn: 'A' | 'B'; sellOn: 'A' | 'B'; outcome: OpportunityOutcome },
-    strategyForSlug: ArbitrageStrategy,
     resultingPositionId: string | null = null,
     note: string | null = null,
   ): Promise<void> {
-    const buySlug = info.buyOn === 'A' ? strategyForSlug.exchangeA.slug : strategyForSlug.exchangeB.slug;
-    const sellSlug = info.sellOn === 'A' ? strategyForSlug.exchangeA.slug : strategyForSlug.exchangeB.slug;
+    const buySlug = info.buyOn === 'A' ? strategy.exchangeA.slug : strategy.exchangeB.slug;
+    const sellSlug = info.sellOn === 'A' ? strategy.exchangeA.slug : strategy.exchangeB.slug;
 
     const record = this.opportunityRepo.create({
       strategy,
@@ -234,4 +247,6 @@ export class OpportunityDetectorService {
 
     await this.opportunityRepo.save(record);
   }
+
+
 }

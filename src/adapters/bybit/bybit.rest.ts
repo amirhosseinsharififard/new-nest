@@ -153,4 +153,55 @@ export class BybitRestClient {
       result: { list: { orderId: string; orderStatus: string; cumExecQty: string; avgPrice: string }[] };
     }>('/v5/order/realtime', { category: 'linear', symbol, orderId });
   }
+
+
+  async getMarketSymbols(): Promise<string[]> {
+    await this.rateLimiter.acquire();
+
+    const symbols: string[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const response = await this.http.get('/v5/market/instruments-info', {
+        params: {
+          category: 'linear',
+          limit: 1000,
+          ...(cursor ? { cursor } : {}),
+        },
+      });
+
+      const data = response.data;
+
+      if (data.retCode !== 0) {
+        throw new ExchangeError(
+          'bybit',
+          'UNKNOWN',
+          `Bybit instruments error: ${data.retMsg}`,
+        );
+      }
+
+      const instruments = data.result.list as Array<{
+        symbol: string;
+        status: string;
+        contractType: string;
+        baseCoin: string;
+        quoteCoin: string;
+      }>;
+
+      for (const instrument of instruments) {
+        if (
+          instrument.status === 'Trading' &&
+          instrument.contractType === 'LinearPerpetual' &&
+          instrument.quoteCoin === 'USDT'
+        ) {
+          symbols.push(`${instrument.baseCoin}-USDT`);
+        }
+      }
+
+      cursor = data.result.nextPageCursor || undefined;
+    } while (cursor);
+
+    return [...new Set(symbols)];
+  }
+
 }

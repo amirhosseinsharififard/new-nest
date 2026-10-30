@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { registerAs } from '@nestjs/config';
 import { DataSource, DataSourceOptions } from 'typeorm';
 

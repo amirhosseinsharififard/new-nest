@@ -21,20 +21,63 @@ export class BinanceWsManager {
   private tickerCallbacks = new Map<string, (data: TickerData) => void>();
   private positionCallback: ((data: PositionUpdate) => void) | null = null;
 
-  constructor(
-    private readonly restClient: BinanceRestClient,
-    private readonly wsBaseUrl = 'wss://fstream.binance.com',
-  ) {}
+ constructor(
+  private readonly restClient: BinanceRestClient | null,
+  private readonly wsBaseUrl = 'wss://fstream.binance.com',
+) {}
 
-  async connectTicker(symbol: string, cb: (data: TickerData) => void): Promise<void> {
-    const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
-    this.tickerCallbacks.set(binanceSymbol, cb);
+// این متدها را به کلاس BinanceWsManager اضافه کنید
 
-    if (this.tickerWs) {
-      // برای سادگی فاز ۲: هر Symbol جدید یعنی Reconnect با استریم ترکیبی جدید.
-      // در Production بهتره از Combined Stream برای همه Symbolها همزمان استفاده بشه.
-      this.tickerWs.disconnect();
+  async connectTickers(
+    symbols: string[],
+    cb: (data: TickerData) => void,
+  ): Promise<void> {
+    this.logger.log(`PUBLIC TICKER CONNECT BATCH -> ${symbols.length} symbols`);
+
+    let hasNew = false;
+    for (const symbol of symbols) {
+      const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
+      if (!this.tickerCallbacks.has(binanceSymbol)) {
+        this.tickerCallbacks.set(binanceSymbol, cb);
+        hasNew = true;
+      }
     }
+
+    // فقط یک بار برای کل مجموعه نمادها Reconnect می‌کنیم
+    if (hasNew) {
+      await this.reconnectTickerStream();
+    }
+  }
+
+  async disconnectTickers(symbols: string[]): Promise<void> {
+    let modified = false;
+    for (const symbol of symbols) {
+      const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
+      if (this.tickerCallbacks.delete(binanceSymbol)) {
+        modified = true;
+      }
+    }
+
+    if (modified) {
+      await this.reconnectTickerStream();
+    }
+  }
+
+  async disconnectTicker(symbol: string): Promise<void> {
+    const binanceSymbol = toBinanceSymbol(symbol).toLowerCase();
+    if (!this.tickerCallbacks.delete(binanceSymbol)) return;
+
+    await this.reconnectTickerStream();
+  }
+
+  private async reconnectTickerStream(): Promise<void> {
+    this.tickerWs?.disconnect();
+    this.tickerWs = null;
+
+    // Combined Stream بین نمادها مشترک است؛ بعد از هر تغییر در مجموعهٔ نمادها
+    // باید با URL جدید وصل شود. اگر نمادی باقی نمانده، اتصال عمومی را هم می‌بندیم.
+    if (this.tickerCallbacks.size === 0) return;
+
 
     const streams = Array.from(this.tickerCallbacks.keys())
       .map((s) => `${s}@bookTicker`)
@@ -64,8 +107,10 @@ export class BinanceWsManager {
         exchangeId: 'binance',
         symbol: payload.s,
         bidPrice: parseFloat(payload.b),
+        bidSize: parseFloat(payload.B),
         askPrice: parseFloat(payload.a),
-        timestamp: Date.now(),
+        askSize: parseFloat(payload.A),
+        timestamp: payload.T ?? payload.E ?? Date.now(),
       };
       cb(tickerData);
     } catch (err) {
@@ -73,30 +118,41 @@ export class BinanceWsManager {
     }
   }
 
-  async connectUserDataStream(cb: (data: PositionUpdate) => void): Promise<void> {
-    this.positionCallback = cb;
-
-    const { listenKey } = await this.restClient.createListenKey();
-    this.listenKey = listenKey;
-
-    this.userDataWs = new ReconnectingWsClient({
-      url: `${this.wsBaseUrl}/ws/${listenKey}`,
-      exchangeId: 'binance-userdata',
-      onMessage: (raw) => this.handleUserDataMessage(raw),
-    });
-
-    await this.userDataWs.connect();
-
-    // هر 30 دقیقه یک‌بار Keep-alive، چون Binance بعد از 60 دقیقه بی‌فعالیت listenKey رو می‌بنده
-    this.keepAliveInterval = setInterval(
-      () => {
-        this.restClient.keepAliveListenKey().catch((err) => {
-          this.logger.error(`خطا در Keep-alive listenKey: ${err.message}`);
-        });
-      },
-      30 * 60 * 1000,
+ async connectUserDataStream(
+  cb: (data: PositionUpdate) => void,
+): Promise<void> {
+  if (!this.restClient) {
+    throw new Error(
+      'Binance User Data Stream requires authenticated REST client',
     );
   }
+
+  const restClient = this.restClient;
+
+  this.positionCallback = cb;
+
+  const { listenKey } = await restClient.createListenKey();
+  this.listenKey = listenKey;
+
+  this.userDataWs = new ReconnectingWsClient({
+    url: `${this.wsBaseUrl}/ws/${listenKey}`,
+    exchangeId: 'binance-userdata',
+    onMessage: (raw) => this.handleUserDataMessage(raw),
+  });
+
+  await this.userDataWs.connect();
+
+  this.keepAliveInterval = setInterval(
+    () => {
+      restClient.keepAliveListenKey().catch((err) => {
+        this.logger.error(
+          `خطا در Keep-alive listenKey: ${err.message}`,
+        );
+      });
+    },
+    30 * 60 * 1000,
+  );
+}
 
   private handleUserDataMessage(raw: any): void {
     try {

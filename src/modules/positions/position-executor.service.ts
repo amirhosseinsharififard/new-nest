@@ -19,16 +19,17 @@ export interface OpenPairResult {
 }
 
 /**
- * مسئول باز کردن هم‌زمان دو Leg یک پوزیشن آربیتراژ.
+ * Responsible for concurrently opening both legs of an arbitrage position.
  *
- * قوانین حیاتی این سرویس (طبق تحلیل ریسک اولیه پروژه):
- * ۱. قبل از هر اجرا، یک Lock روی استراتژی گرفته می‌شه تا دو اجرای
- *    هم‌زمان (مثلا از دو تیک قیمت پشت‌سرهم) با هم تداخل نکنن.
- * ۲. هر دو Leg با Promise.allSettled به‌صورت موازی باز می‌شن، نه پشت‌سرهم.
- * ۳. اگر یکی موفق و دیگری fail بشه، بلافاصله Leg موفق بسته می‌شه (Hedge-Close).
- * ۴. اگر یک Leg با وضعیت UNKNOWN (Timeout) برگرده، به‌جای فرض کردن
- *    fail/success، پوزیشن با وضعیت NEEDS_MANUAL_REVIEW ثبت می‌شه —
- *    چون بستن یک پوزیشنی که شاید اصلا باز نشده، خودش می‌تونه ریسک جدید بسازه.
+ * Critical rules (based on system risk analysis):
+ * 1. A Redis lock is acquired per strategy before execution to prevent concurrent
+ *    duplicate executions (e.g., from rapid consecutive price ticks).
+ * 2. Both legs are opened simultaneously using Promise.allSettled, not sequentially.
+ * 3. If one leg succeeds and the other fails, the successful leg is immediately
+ *    closed (Hedge-Close) to avoid market exposure.
+ * 4. If any leg returns an UNKNOWN state (e.g., Network Timeout), the position
+ *    is marked as NEEDS_MANUAL_REVIEW instead of assuming success/failure. Blindly
+ *    closing an unknown position can create severe new risks.
  */
 @Injectable()
 export class PositionExecutorService {
@@ -49,18 +50,19 @@ export class PositionExecutorService {
   }
 
   /**
-   * تلاش برای باز کردن پوزیشن جفتی بر اساس یک فرصت شناسایی‌شده.
-   * اگر قفل گرفته نشه (اجرای هم‌زمان دیگری در جریانه)، wasLocked=true
-   * برمی‌گرده و هیچ پوزیشنی ساخته نمیشه.
+   * Attempts to open a paired position based on a detected opportunity.
+   * Returns { wasLocked: true } if another execution for this strategy is currently running.
    */
   async openPairFromOpportunity(
     strategy: ArbitrageStrategy,
     direction: SpreadDirection,
   ): Promise<OpenPairResult | { wasLocked: true }> {
     const lockKey = this.lockKey(strategy.id);
+
+    // Attempt to acquire execution lock
     const acquired = await this.redisService.acquireLock(lockKey, LOCK_TTL_SECONDS);
     if (!acquired) {
-      this.logger.warn(`قفل استراتژی ${strategy.id} گرفته نشد، اجرای دیگری در جریان است`);
+      this.logger.warn(`Failed to acquire lock for strategy ${strategy.id}. Another execution is in progress.`);
       return { wasLocked: true };
     }
 
@@ -68,6 +70,7 @@ export class PositionExecutorService {
       const result = await this.executeOpenPair(strategy, direction);
       return { position: result, wasLocked: false };
     } finally {
+      // Always release the lock, whether execution succeeded or failed
       await this.redisService.releaseLock(lockKey);
     }
   }
@@ -77,19 +80,17 @@ export class PositionExecutorService {
     direction: SpreadDirection,
   ): Promise<ArbitragePosition> {
     if (!strategy.exchangeAAccount || !strategy.exchangeBAccount) {
-      throw new Error(
-        `استراتژی ${strategy.id} اکانت معاملاتی برای یکی از دو صرافی ندارد`,
-      );
+      throw new Error(`Strategy ${strategy.id} is missing a trading account for one of the exchanges.`);
     }
 
     const idempotencyKey = crypto.randomUUID();
     const quantity = parseFloat(strategy.orderQuantity);
 
-    // جهت "buyOn: A" یعنی روی صرافی A باید Long باز کنیم (خرید)،
-    // و روی صرافی B باید Short باز کنیم (فروش) — و برعکس.
+    // If direction says "buyOn: A", we go LONG on Exchange A and SHORT on Exchange B (and vice versa)
     const sideOnA = direction.buyOn === 'A' ? PositionSide.LONG : PositionSide.SHORT;
     const sideOnB = direction.buyOn === 'B' ? PositionSide.LONG : PositionSide.SHORT;
 
+    // Create the initial position record
     let position = this.positionRepo.create({
       strategy,
       symbol: strategy.symbol,
@@ -99,14 +100,17 @@ export class PositionExecutorService {
     });
     position = await this.positionRepo.save(position);
 
+    // Execute both orders concurrently to minimize slippage
     const [resultA, resultB] = await Promise.allSettled([
       this.openSingleLeg(strategy.exchangeAAccount.id, strategy.symbol, sideOnA, quantity, `${idempotencyKey}-A`),
       this.openSingleLeg(strategy.exchangeBAccount.id, strategy.symbol, sideOnB, quantity, `${idempotencyKey}-B`),
     ]);
 
+    // Persist leg results to the database
     const legA = await this.persistLeg(position, strategy.exchangeAAccount.id, sideOnA, quantity, resultA);
     const legB = await this.persistLeg(position, strategy.exchangeBAccount.id, sideOnB, quantity, resultB);
 
+    // Determine final position status (and trigger hedge-close if necessary)
     position.status = await this.resolveFinalStatus(strategy, legA, legB);
     return this.positionRepo.save(position);
   }
@@ -144,7 +148,7 @@ export class PositionExecutorService {
       leg.avgFillPrice = settled.value.avgFillPrice?.toString() ?? null;
       leg.exchangeOrderId = settled.value.exchangeOrderId;
     } else {
-      this.logger.error(`باز کردن Leg شکست خورد: ${settled.reason?.message ?? settled.reason}`);
+      this.logger.error(`Failed to open Leg: ${settled.reason?.message ?? settled.reason}`);
       leg.status = OrderStatus.FAILED;
     }
 
@@ -152,8 +156,8 @@ export class PositionExecutorService {
   }
 
   /**
-   * تعیین وضعیت نهایی پوزیشن بر اساس نتیجه دو Leg، و در صورت لزوم
-   * اجرای Hedge-Close (بستن Legی که موفق باز شده، وقتی طرف مقابل fail شده).
+   * Determines the final status of the position based on both legs' outcomes.
+   * If one leg succeeded while the other failed, it automatically triggers a Hedge-Close.
    */
   private async resolveFinalStatus(
     strategy: ArbitrageStrategy,
@@ -164,45 +168,39 @@ export class PositionExecutorService {
       leg.status === OrderStatus.FILLED || leg.status === OrderStatus.PARTIALLY_FILLED;
     const isUnknown = (leg: PositionLeg) => leg.status === OrderStatus.UNKNOWN;
 
-    // هر دو موفق => پوزیشن باز است
+    // Both legs opened successfully
     if (isSuccessfulFill(legA) && isSuccessfulFill(legB)) {
       return ArbitragePositionStatus.OPEN;
     }
 
-    // هر دو fail شدند => هیچ اقدامی لازم نیست
+    // Both legs failed (no market exposure)
     if (!isSuccessfulFill(legA) && !isSuccessfulFill(legB) && !isUnknown(legA) && !isUnknown(legB)) {
       return ArbitragePositionStatus.FAILED;
     }
 
-    // اگر هرکدوم UNKNOWN (Timeout) باشه، بستن دستی خطرناکه — نیاز به بررسی انسانی
+    // If either leg is UNKNOWN (e.g., Timeout), automatic closing is dangerous.
+    // We must flag it for manual human review.
     if (isUnknown(legA) || isUnknown(legB)) {
-      this.logger.warn(
-        `پوزیشن ${strategy.id} نیازمند بررسی دستی است (وضعیت یکی از Legها نامشخص/Timeout)`,
-      );
+      this.logger.warn(`Position ${strategy.id} requires MANUAL REVIEW (One or both legs timed out / UNKNOWN state).`);
       return ArbitragePositionStatus.NEEDS_MANUAL_REVIEW;
     }
 
-    // یکی موفق، دیگری fail => باید موفق رو ببندیم (Hedge-Close)
-    const [successfulLeg, failedAccountId] = isSuccessfulFill(legA)
-      ? [legA, null]
-      : [legB, null];
+    // Exactly ONE leg succeeded, and the other failed. We must close the successful one (Hedge-Close).
+    const successfulLeg = isSuccessfulFill(legA) ? legA : legB;
 
-    if (successfulLeg) {
-      this.logger.warn(
-        `یک پا از پوزیشن ${strategy.id} باز شد ولی طرف مقابل fail شد — در حال Hedge-Close`,
-      );
-      await this.hedgeClose(successfulLeg);
-      return ArbitragePositionStatus.FAILED;
-    }
+    this.logger.warn(`One leg of position ${strategy.id} succeeded while the other failed. Initiating Hedge-Close.`);
+    await this.hedgeClose(successfulLeg);
 
+    // The overall arbitrage strategy failed to execute properly
     return ArbitragePositionStatus.FAILED;
   }
 
+  /**
+   * Closes an successfully opened leg when its paired leg fails to open.
+   */
   private async hedgeClose(leg: PositionLeg): Promise<void> {
     try {
-      const config = await this.exchangeAccountsService.buildAdapterConfig(
-        leg.exchangeAccount.id,
-      );
+      const config = await this.exchangeAccountsService.buildAdapterConfig(leg.exchangeAccount.id);
       const adapter = this.registry.getInstance(config);
       const filledQty = parseFloat(leg.filledQuantity ?? leg.requestedQuantity);
 
@@ -214,18 +212,15 @@ export class PositionExecutorService {
         idempotencyKey: `hedge-close-${leg.id}`,
       });
 
-      this.logger.log(`Hedge-Close برای Leg ${leg.id} با موفقیت انجام شد`);
+      this.logger.log(`Hedge-Close for Leg ${leg.id} executed successfully.`);
     } catch (err) {
-      // اگر Hedge-Close هم fail بشه، این دیگه یک حالت بحرانیه که باید
-      // فوری به کاربر/ادمین اطلاع داده بشه (Notification System در فاز بعد)
-      this.logger.error(
-        `⚠️ Hedge-Close برای Leg ${leg.id} شکست خورد! نیاز به بررسی فوری دستی: ${(err as Error).message}`,
-      );
+      // If Hedge-Close fails, it's a critical state requiring immediate admin notification.
+      this.logger.error(`⚠️ CRITICAL: Hedge-Close for Leg ${leg.id} FAILED! Manual intervention required immediately: ${(err as Error).message}`);
       throw err;
     }
   }
 
-  /** آیا در حال حاضر پوزیشن بازی از این استراتژی وجود دارد؟ (برای جلوگیری از Duplicate Entry) */
+  /** Checks if there's any active position currently open or opening for a given strategy. */
   async hasOpenPosition(strategyId: string): Promise<boolean> {
     const count = await this.positionRepo.count({
       where: [
@@ -239,21 +234,20 @@ export class PositionExecutorService {
   }
 
   /**
-   * بستن دستی هر دو Leg یک پوزیشن با یک فراخوانی.
-   * هر دو Leg موازی بسته می‌شوند؛ اگر یکی fail بشه، دیگری همچنان
-   * تلاش می‌شه بسته بشه (برخلاف Hedge-Close، اینجا کاربر صراحتاً
-   * درخواست خروج داده، پس نباید نیمه‌کاره متوقف بشه).
+   * Manually closes both legs of a paired position.
+   * Both legs are closed in parallel. If one fails, the other still attempts to close.
    */
   async closePair(positionId: string): Promise<ArbitragePosition> {
     const position = await this.positionRepo.findOne({
       where: { id: positionId },
       relations: ['legs', 'legs.exchangeAccount', 'strategy'],
     });
+
     if (!position) {
-      throw new NotFoundException('پوزیشن یافت نشد');
+      throw new NotFoundException('Position not found');
     }
     if (position.legs.length !== 2) {
-      throw new ConflictException('این پوزیشن دقیقا دو Leg ندارد، بستن خودکار امکان‌پذیر نیست');
+      throw new ConflictException('This position does not have exactly two legs. Auto-close is not possible.');
     }
 
     const [resultA, resultB] = await Promise.allSettled(
@@ -266,37 +260,39 @@ export class PositionExecutorService {
       : ArbitragePositionStatus.NEEDS_MANUAL_REVIEW;
 
     if (!bothClosed) {
-      this.logger.error(
-        `بستن پوزیشن ${positionId} ناقص انجام شد؛ نیاز به بررسی دستی دارد`,
-      );
+      this.logger.error(`Partial failure while closing position ${positionId}. Requires manual review.`);
     }
 
     return this.positionRepo.save(position);
   }
 
-  /** بستن فقط یک Leg مشخص از یک پوزیشن (نه هر دو) */
+  /** Manually closes a single specific leg of a position. */
   async closeSingleLeg(positionId: string, legId: string): Promise<PositionLeg> {
     const position = await this.positionRepo.findOne({
       where: { id: positionId },
       relations: ['legs', 'legs.exchangeAccount'],
     });
+
     if (!position) {
-      throw new NotFoundException('پوزیشن یافت نشد');
+      throw new NotFoundException('Position not found');
     }
+
     const leg = position.legs.find((l) => l.id === legId);
     if (!leg) {
-      throw new NotFoundException('Leg مورد نظر در این پوزیشن یافت نشد');
+      throw new NotFoundException('Specified leg not found in this position');
     }
 
     const updatedLeg = await this.closeSingleLegInternal(leg);
 
-    // اگر Leg دیگری همچنان باز باشد، پوزیشن در وضعیت HEDGING باقی می‌مونه
-    // (چون دیگه Hedge کامل نیست)؛ اگر این آخرین Leg باز بود، CLOSED می‌شه.
+    // Check if any other legs remain open
     const remainingOpenLegs = position.legs.filter(
       (l) => l.id !== legId && (l.status === OrderStatus.FILLED || l.status === OrderStatus.PARTIALLY_FILLED),
     );
-    position.status =
-      remainingOpenLegs.length > 0 ? ArbitragePositionStatus.HEDGING : ArbitragePositionStatus.CLOSED;
+
+    position.status = remainingOpenLegs.length > 0
+      ? ArbitragePositionStatus.HEDGING
+      : ArbitragePositionStatus.CLOSED;
+
     await this.positionRepo.save(position);
 
     return updatedLeg;
@@ -318,6 +314,7 @@ export class PositionExecutorService {
     leg.status = result.status;
     leg.filledQuantity = result.filledQuantity.toString();
     leg.avgFillPrice = result.avgFillPrice?.toString() ?? leg.avgFillPrice;
+
     return this.legRepo.save(leg);
   }
 }

@@ -39,7 +39,7 @@ export class PositionLeg {
   @Column({ type: 'decimal', precision: 20, scale: 8, nullable: true })
   avgFillPrice: string | null;
 
-  @Column({ nullable: true })
+  @Column({type:"varchar", nullable: true })
   exchangeOrderId: string | null;
 
   @CreateDateColumn()

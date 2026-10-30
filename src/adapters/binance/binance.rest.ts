@@ -119,8 +119,11 @@ export class BinanceRestClient {
   async getBookTicker(symbol: string) {
     return this.publicRequest<{
       symbol: string;
-      bidPrice: string;
-      askPrice: string;
+      bidPrice: string; // بهترین قیمت خرید
+      bidQty: string;   // تعداد توکن موجود در بهترین قیمت خرید (حجم)
+      askPrice: string; // بهترین قیمت فروش
+      askQty: string;   // تعداد توکن موجود در بهترین قیمت فروش (حجم)
+      time: number;
     }>('/fapi/v1/ticker/bookTicker', { symbol });
   }
 
@@ -169,4 +172,29 @@ export class BinanceRestClient {
   async keepAliveListenKey() {
     return this.signedRequest<Record<string, never>>('PUT', '/fapi/v1/listenKey');
   }
+
+  async getMarketSymbols(): Promise<string[]> {
+  const response = await this.publicRequest<{
+    symbols: Array<{
+      symbol: string;
+      baseAsset: string;
+      quoteAsset: string;
+      contractType: string;
+      status: string;
+    }>;
+  }>('/fapi/v1/exchangeInfo');
+
+  return [
+    ...new Set(
+      response.symbols
+        .filter(
+          (item) =>
+            item.status === 'TRADING' &&
+            item.contractType === 'PERPETUAL' &&
+            item.quoteAsset === 'USDT',
+        )
+        .map((item) => `${item.baseAsset}-USDT`),
+    ),
+  ];
+}
 }

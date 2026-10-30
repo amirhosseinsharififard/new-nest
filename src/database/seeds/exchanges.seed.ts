@@ -54,6 +54,7 @@ const EXCHANGES_SEED = [
 ];
 
 async function runSeed() {
+
   const dataSource = new DataSource({
     type: 'postgres',
     host: process.env.DB_HOST,
@@ -65,6 +66,35 @@ async function runSeed() {
   });
 
   await dataSource.initialize();
+console.log('Seed DB:', {
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  database: process.env.DB_DATABASE,
+  username: process.env.DB_USERNAME,
+});
+
+console.log(
+  await dataSource.query(`
+    SELECT current_database(), current_user,
+           inet_server_addr(), inet_server_port()
+  `),
+);
+
+  console.log(
+    await dataSource.query(`
+      SELECT current_database(), current_user,
+            inet_server_addr(), inet_server_port()
+    `),
+  );
+  console.log(
+  await dataSource.query(`
+    SELECT table_schema, table_name
+    FROM information_schema.tables
+    WHERE table_type = 'BASE TABLE'
+      AND table_schema NOT IN ('pg_catalog', 'information_schema')
+    ORDER BY table_schema, table_name
+  `),
+);
   const repo = dataSource.getRepository(Exchange);
 
   for (const seed of EXCHANGES_SEED) {

@@ -29,19 +29,33 @@ import { mapBinanceOrderStatus, toBinanceSymbol } from './binance.mapper';
 export class BinanceAdapter implements IExchangeAdapter {
   readonly exchangeId = 'binance';
   private readonly logger = new Logger(BinanceAdapter.name);
-  private readonly rest: BinanceRestClient;
+  private readonly rest: BinanceRestClient | null;
+  private readonly marketDataRest: BinanceRestClient;
   private readonly wsManager: BinanceWsManager;
 
-  constructor(private readonly config: ExchangeAccountConfig) {
-    if (!config.apiKey || !config.apiSecret) {
-      throw new Error('Binance Adapter نیازمند apiKey و apiSecret است');
-    }
+ constructor(private readonly config: ExchangeAccountConfig) {
+  if (config.apiKey && config.apiSecret) {
     this.rest = new BinanceRestClient(
-      { apiKey: config.apiKey, apiSecret: config.apiSecret },
+      {
+        apiKey: config.apiKey,
+        apiSecret: config.apiSecret,
+      },
       config.restBaseUrl,
     );
-    this.wsManager = new BinanceWsManager(this.rest, config.wsBaseUrl);
+  } else {
+    this.rest = null;
   }
+
+  this.marketDataRest = new BinanceRestClient(
+    { apiKey: '', apiSecret: '' },
+    config.restBaseUrl,
+  );
+
+  this.wsManager = new BinanceWsManager(
+    this.rest,
+    config.wsBaseUrl,
+  );
+}
 
   async connectWebSocket(): Promise<void> {
     // اتصال اولیه User Data Stream. Ticker ها به‌صورت جداگانه با subscribeTicker وصل میشن.
@@ -56,16 +70,56 @@ export class BinanceAdapter implements IExchangeAdapter {
     return this.wsManager.isHealthy();
   }
 
-  subscribeTicker(symbol: string, cb: (data: TickerData) => void): void {
-    this.wsManager.connectTicker(symbol, cb).catch((err) => {
-      this.logger.error(`خطا در اتصال Ticker Stream: ${err.message}`);
-    });
+// --- متدهای تکی (حفظ شده برای سازگاری قبلی) ---
+  subscribeTicker(
+    symbol: string,
+    cb: (data: TickerData) => void,
+  ): void {
+    console.log('🔥🔥 ADAPTER subscribeTicker CALLED');
+    console.log('SYMBOL:', symbol);
+
+    // به جای صدا زدن متد قدیمی، متد Bulk را با یک آرایه تک عضوی صدا می‌زنیم
+    this.wsManager
+      .connectTickers([symbol], cb)
+      .then(() => {
+        console.log('🔥🔥 ADAPTER connectTicker DONE');
+      })
+      .catch((err) => {
+        console.error('🔥🔥 ADAPTER connectTicker ERROR:', err);
+      });
   }
 
   unsubscribeTicker(symbol: string): void {
-    // TODO: پیاده‌سازی کامل نیازمند مدیریت لیست Symbol های فعال در ReconnectingWsClient است
-    this.logger.warn('unsubscribeTicker هنوز به‌طور کامل پیاده‌سازی نشده');
+    this.wsManager.disconnectTickers([symbol]).catch((err) => {
+      this.logger.error(`خطا در لغو اشتراک Ticker Stream: ${err.message}`);
+    });
   }
+
+  // --- متدهای گروهی (جدید - برای دریافت ۱۰۰ ارز همزمان) ---
+  subscribeTickers(
+    symbols: string[],
+    cb: (data: TickerData) => void,
+  ): void {
+    this.logger.log(`🔥🔥 ADAPTER subscribeTickers BATCH CALLED -> ${symbols.length} symbols`);
+
+    this.wsManager
+      .connectTickers(symbols, cb)
+      .then(() => {
+        this.logger.log(`🔥🔥 ADAPTER connectTickers BATCH DONE`);
+      })
+      .catch((err) => {
+        this.logger.error(`🔥🔥 ADAPTER connectTickers BATCH ERROR:`, err);
+      });
+  }
+
+  unsubscribeTickers(symbols: string[]): void {
+    this.wsManager.disconnectTickers(symbols).catch((err) => {
+      this.logger.error(`خطا در لغو اشتراک Batch Ticker Stream: ${err.message}`);
+    });
+  }
+
+
+
 
   subscribePositionUpdates(
     accountId: string,
@@ -79,6 +133,11 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   async openPosition(params: OpenPositionParams): Promise<OrderResult> {
+     if (!this.rest) {
+    throw new Error(
+      'Binance trading requires API credentials',
+    );
+  }
     const side = params.side === PositionSide.LONG ? 'BUY' : 'SELL';
     return this.executeOrder({
       symbol: toBinanceSymbol(params.symbol),
@@ -90,6 +149,11 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   async closePosition(params: ClosePositionParams): Promise<OrderResult> {
+     if (!this.rest) {
+    throw new Error(
+      'Binance trading requires API credentials',
+    );
+  }
     // برای بستن پوزیشن Long باید SELL بزنیم، برای بستن Short باید BUY بزنیم
     const side = params.side === PositionSide.LONG ? 'SELL' : 'BUY';
     return this.executeOrder({
@@ -102,21 +166,27 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   private async executeOrder(params: {
-    symbol: string;
-    side: 'BUY' | 'SELL';
-    quantity: number;
-    reduceOnly: boolean;
-    idempotencyKey: string;
-  }): Promise<OrderResult> {
-    try {
-      const response = await this.rest.placeOrder({
-        symbol: params.symbol,
-        side: params.side,
-        type: 'MARKET',
-        quantity: params.quantity,
-        reduceOnly: params.reduceOnly,
-        newClientOrderId: params.idempotencyKey,
-      });
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  reduceOnly: boolean;
+  idempotencyKey: string;
+}): Promise<OrderResult> {
+  if (!this.rest) {
+    throw new Error(
+      'Binance trading requires API credentials',
+    );
+  }
+
+  try {
+    const response = await this.rest.placeOrder({
+      symbol: params.symbol,
+      side: params.side,
+      type: 'MARKET',
+      quantity: params.quantity,
+      reduceOnly: params.reduceOnly,
+      newClientOrderId: params.idempotencyKey,
+    });
 
       return {
         exchangeOrderId: String(response.orderId),
@@ -147,6 +217,11 @@ export class BinanceAdapter implements IExchangeAdapter {
     accountId: string,
     symbol: string,
   ): Promise<PositionStatus> {
+     if (!this.rest) {
+    throw new Error(
+      'Binance trading requires API credentials',
+    );
+  }
     const binanceSymbol = toBinanceSymbol(symbol);
     const positions = await this.rest.getPositionRisk(binanceSymbol);
     const position = positions.find((p) => p.symbol === binanceSymbol);
@@ -174,6 +249,11 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   async getBalance(accountId: string): Promise<Balance[]> {
+     if (!this.rest) {
+    throw new Error(
+      'Binance trading requires API credentials',
+    );
+  }
     const balances = await this.rest.getBalance();
     return balances
       .filter((b) => parseFloat(b.balance) > 0)
@@ -182,5 +262,9 @@ export class BinanceAdapter implements IExchangeAdapter {
         free: parseFloat(b.availableBalance),
         locked: parseFloat(b.balance) - parseFloat(b.availableBalance),
       }));
+  }
+
+  async getMarketSymbols(): Promise<string[]> {
+  return this.marketDataRest.getMarketSymbols();
   }
 }

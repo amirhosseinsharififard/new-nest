@@ -30,17 +30,20 @@ export class OkxAdapter implements IExchangeAdapter {
   private readonly wsManager: OkxWsManager;
 
   constructor(private readonly config: ExchangeAccountConfig) {
-    if (!config.apiKey || !config.apiSecret || !config.passphrase) {
+    const isPublicOnly = !config.apiKey || config.accountId?.startsWith('public-market-data');
+
+    if (!isPublicOnly && (!config.apiKey || !config.apiSecret || !config.passphrase)) {
+
       throw new Error('OKX Adapter نیازمند apiKey، apiSecret و passphrase است');
     }
     this.rest = new OkxRestClient(
-      { apiKey: config.apiKey, apiSecret: config.apiSecret, passphrase: config.passphrase },
+      { apiKey: config.apiKey??'', apiSecret: config.apiSecret??'', passphrase: config.passphrase??'' },
       config.restBaseUrl,
     );
     this.wsManager = new OkxWsManager(
-      config.apiKey,
-      config.apiSecret,
-      config.passphrase,
+      config.apiKey??"",
+      config.apiSecret??'',
+      config.passphrase??'',
     );
   }
 
@@ -56,16 +59,69 @@ export class OkxAdapter implements IExchangeAdapter {
     return this.wsManager.isHealthy();
   }
 
-  subscribeTicker(symbol: string, cb: (data: TickerData) => void): void {
-    this.wsManager.connectTicker(toOkxSymbol(symbol), cb).catch((err) => {
-      this.logger.error(`خطا در اتصال Ticker: ${err.message}`);
+// --- متدهای تکی (حفظ شده برای سازگاری قبلی) ---
+  subscribeTicker(
+  symbol: string,
+  cb: (data: TickerData) => void,
+  ): void {
+    const instId = toOkxSymbol(symbol);
+
+    this.wsManager.connectTicker(instId, (data) => {
+      cb({
+        ...data,
+        symbol,
+      });
+    }).catch((err) => {
+      this.logger.error(
+        `خطا در اتصال Ticker برای ${symbol}: ${err.message}`,
+      );
     });
   }
 
   unsubscribeTicker(symbol: string): void {
-    this.logger.warn('unsubscribeTicker هنوز کامل پیاده‌سازی نشده');
+    this.wsManager.disconnectTicker(toOkxSymbol(symbol));
   }
 
+  // --- متدهای گروهی (جدید - برای دریافت ۱۰۰ ارز همزمان) ---
+  subscribeTickers(
+  symbols: string[],
+  cb: (data: TickerData) => void,
+): void {
+  const okxSymbols = symbols.map(toOkxSymbol);
+
+  const internalSymbolByOkxSymbol = new Map(
+    symbols.map((symbol) => [toOkxSymbol(symbol), symbol]),
+  );
+
+  this.logger.log(
+    `OKX batch subscription: ${okxSymbols.length} symbols`,
+  );
+
+  this.wsManager
+    .connectTickers(okxSymbols, (data) => {
+      cb({
+        ...data,
+        symbol:
+          internalSymbolByOkxSymbol.get(data.symbol) ?? data.symbol,
+      });
+    })
+    .then(() => {
+      this.logger.log('OKX batch subscription initialized');
+    })
+    .catch((err) => {
+      this.logger.error(
+        `OKX batch subscription failed: ${err.message}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+    });
+}
+
+  unsubscribeTickers(symbols: string[]): void {
+    const okxSymbols = symbols.map(toOkxSymbol);
+    for (const sym of okxSymbols) {
+      this.wsManager.disconnectTicker(sym);
+    }
+  }
   subscribePositionUpdates(
     accountId: string,
     cb: (data: PositionUpdate) => void,
@@ -183,4 +239,8 @@ export class OkxAdapter implements IExchangeAdapter {
         locked: parseFloat(d.frozenBal),
       }));
   }
+
+  async getMarketSymbols(): Promise<string[]> {
+  return this.rest.getMarketSymbols();
+}
 }

@@ -46,7 +46,7 @@ export class ArbitrageOpportunity {
   outcome: OpportunityOutcome;
 
   // شناسه پوزیشنی که (در صورت اجرا) از این فرصت ساخته شد
-  @Column({ nullable: true })
+  @Column({type: 'varchar', nullable: true })
   resultingPositionId: string | null;
 
   @Column({ type: 'text', nullable: true })

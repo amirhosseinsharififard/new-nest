@@ -4,12 +4,25 @@ import { ReconnectingWsClient } from '../common/reconnecting-ws-client';
 import { mapBybitPositionSide } from './bybit.mapper';
 import { OrderStatus, PositionUpdate, TickerData } from '../../core/exchange/exchange.types';
 
+export function fromBybitSymbol(symbol: string): string {
+  if (symbol.endsWith('USDT')) {
+    return symbol.replace('USDT', '-USDT');
+  }
+  return symbol;
+}
+
 export class BybitWsManager {
   private readonly logger = new Logger(BybitWsManager.name);
   private publicWs: ReconnectingWsClient | null = null;
   private privateWs: ReconnectingWsClient | null = null;
   private tickerCallbacks = new Map<string, (data: TickerData) => void>();
   private positionCallback: ((data: PositionUpdate) => void) | null = null;
+
+  // کش آخرین قیمت‌ها و حجم‌ها برای مدیریت پیام‌های دلتا
+  private lastPrices = new Map<
+    string,
+    { bidPrice: number; bidSize: number; askPrice: number; askSize: number }
+  >();
 
   constructor(
     private readonly apiKey: string,
@@ -18,7 +31,34 @@ export class BybitWsManager {
   ) {}
 
   async connectTicker(symbol: string, cb: (data: TickerData) => void): Promise<void> {
-    this.tickerCallbacks.set(symbol, cb);
+    await this.connectTickers([symbol], cb);
+  }
+
+  disconnectTicker(symbol: string): void {
+    const cleanSymbol = symbol.replace(/[\/\-_]/g, '').toUpperCase();
+    if (!this.tickerCallbacks.delete(cleanSymbol)) return;
+
+    if (this.tickerCallbacks.size === 0) {
+      this.publicWs?.disconnect();
+      this.publicWs = null;
+      return;
+    }
+
+    this.publicWs?.send(
+      JSON.stringify({ op: 'unsubscribe', args: [`tickers.${cleanSymbol}`] }),
+    );
+  }
+
+  async connectTickers(symbols: string[], cb: (data: TickerData) => void): Promise<void> {
+    const newArgs: string[] = [];
+
+    for (const rawSymbol of symbols) {
+      const cleanSymbol = rawSymbol.replace(/[\/\-_]/g, '').toUpperCase();
+      if (!this.tickerCallbacks.has(cleanSymbol)) {
+        this.tickerCallbacks.set(cleanSymbol, cb);
+        newArgs.push(`tickers.${cleanSymbol}`);
+      }
+    }
 
     if (!this.publicWs) {
       this.publicWs = new ReconnectingWsClient({
@@ -29,35 +69,76 @@ export class BybitWsManager {
         onMessage: (raw) => this.handleTickerMessage(raw),
       });
       await this.publicWs.connect();
-    } else {
-      this.publicWs.send(
-        JSON.stringify({ op: 'subscribe', args: [`tickers.${symbol}`] }),
-      );
+    } else if (newArgs.length > 0) {
+      for (let i = 0; i < newArgs.length; i += 10) {
+        const chunk = newArgs.slice(i, i + 10);
+        this.publicWs.send(JSON.stringify({ op: 'subscribe', args: chunk }));
+      }
     }
   }
 
   private subscribeAllTickers(): void {
-    const args = Array.from(this.tickerCallbacks.keys()).map((s) => `tickers.${s}`);
-    this.publicWs?.send(JSON.stringify({ op: 'subscribe', args }));
+    const allArgs = Array.from(this.tickerCallbacks.keys()).map((s) => `tickers.${s}`);
+    for (let i = 0; i < allArgs.length; i += 10) {
+      const chunk = allArgs.slice(i, i + 10);
+      this.publicWs?.send(JSON.stringify({ op: 'subscribe', args: chunk }));
+    }
   }
 
   private handleTickerMessage(raw: any): void {
     try {
-      const parsed = JSON.parse(raw.toString());
+      const rawStr = raw.toString();
+      if (rawStr.includes('op') && rawStr.includes('pong')) return;
+
+      const parsed = JSON.parse(rawStr);
+
+      if (parsed.op === 'subscribe') {
+        if (parsed.success === false || (parsed.ret_msg && parsed.ret_msg !== 'OK')) {
+          this.logger.error(`[BYBIT SUBSCRIBE FAILED]: ${rawStr}`);
+        } else {
+          this.logger.log(`[BYBIT SUBSCRIBE OK]: ${rawStr}`);
+        }
+        return;
+      }
+
       if (!parsed.topic?.startsWith('tickers.')) return;
 
       const symbol = parsed.topic.replace('tickers.', '');
       const cb = this.tickerCallbacks.get(symbol);
-      if (!cb) return;
+
+      if (!cb) {
+        this.logger.warn(
+          `[BYBIT WS] No callback for symbol: "${symbol}". Keys: ${Array.from(this.tickerCallbacks.keys()).join(',')}`,
+        );
+        return;
+      }
 
       const data = parsed.data;
-      if (!data?.bid1Price || !data?.ask1Price) return; // بعضی پیام‌های Delta ممکنه ناقص باشن
+      if (!data) return;
+
+      const current = this.lastPrices.get(symbol) || {
+        bidPrice: 0,
+        bidSize: 0,
+        askPrice: 0,
+        askSize: 0,
+      };
+
+      if (data.bid1Price) current.bidPrice = parseFloat(data.bid1Price);
+      if (data.bid1Size) current.bidSize = parseFloat(data.bid1Size);
+      if (data.ask1Price) current.askPrice = parseFloat(data.ask1Price);
+      if (data.ask1Size) current.askSize = parseFloat(data.ask1Size);
+
+      this.lastPrices.set(symbol, current);
+
+      if (!current.bidPrice || !current.askPrice) return;
 
       cb({
         exchangeId: 'bybit',
-        symbol,
-        bidPrice: parseFloat(data.bid1Price),
-        askPrice: parseFloat(data.ask1Price),
+        symbol: symbol,
+        bidPrice: current.bidPrice,
+        bidSize: current.bidSize,
+        askPrice: current.askPrice,
+        askSize: current.askSize,
         timestamp: parsed.ts ?? Date.now(),
       });
     } catch (err) {
@@ -80,7 +161,6 @@ export class BybitWsManager {
   }
 
   private authenticate(): void {
-    // امضای Bybit برای WS Auth: HMAC("GET/realtime" + expires)
     const expires = Date.now() + 10_000;
     const signature = crypto
       .createHmac('sha256', this.apiSecret)
@@ -91,7 +171,6 @@ export class BybitWsManager {
       JSON.stringify({ op: 'auth', args: [this.apiKey, expires, signature] }),
     );
 
-    // بعد از auth باید subscribe به position stream انجام بشه
     setTimeout(() => {
       this.privateWs?.send(JSON.stringify({ op: 'subscribe', args: ['position'] }));
     }, 500);
