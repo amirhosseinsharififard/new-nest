@@ -15,6 +15,7 @@ export const typeOrmConfig = registerAs(
     migrations: [__dirname + '/../../migrations/*{.ts,.js}'],
     synchronize: false, // هرگز true نشه، حتی در dev — همیشه از migration استفاده کن
     logging: process.env.NODE_ENV === 'development',
+
   }),
 );
 

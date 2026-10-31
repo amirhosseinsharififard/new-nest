@@ -13,18 +13,33 @@ import { ExchangeAccountsModule } from '../exchange-accounts/exchange-accounts.m
 import { MarketDataSubscriptionService } from './market-data-subscription.service';
 import { MarketPriceHistory } from './entities/market-price-history.entity';
 import { MarketHistoryService } from './services/market-history.service';
+import { MarketHistoryConsumerService } from './services/market-history-consumer.service';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([SymbolMapping, Exchange]),
-    RedisModule,
-    ExchangeModule,
-    StrategiesModule,
-    ExchangeAccountsModule,
+ imports: [
+  TypeOrmModule.forFeature([
+    SymbolMapping,
+    Exchange,
     MarketPriceHistory,
-  ],
+  ]),
+  RedisModule,
+  ExchangeModule,
+  StrategiesModule,
+  ExchangeAccountsModule,
+],
   controllers: [MarketDataController],
-  providers: [SpreadCalculatorService, PriceAggregatorService, StrategyPriceWatcherService,MarketDataSubscriptionService,MarketHistoryService],
-  exports: [SpreadCalculatorService, PriceAggregatorService],
+  providers: [
+    SpreadCalculatorService,
+    PriceAggregatorService,
+    StrategyPriceWatcherService,
+    MarketDataSubscriptionService,
+    MarketHistoryService,
+    MarketHistoryConsumerService
+  ],
+  exports: [
+    SpreadCalculatorService,
+    PriceAggregatorService,
+    MarketHistoryService,
+  ],
 })
 export class MarketDataModule {}
