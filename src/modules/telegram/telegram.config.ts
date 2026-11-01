@@ -1,5 +1,5 @@
 
-import { TelegramConfig } from './telegram.types';
+import { TelegramConfig } from './interfaces/telegram.types';
 
 function parseIds(value?: string): number[] {
   if (!value?.trim()) return [];

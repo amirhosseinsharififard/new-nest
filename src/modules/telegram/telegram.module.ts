@@ -11,6 +11,7 @@ import { RiskModule } from '../risk/risk.module';
 
 import { ArbitragePosition } from '../positions/entities/arbitrage-position.entity';
 
+import { TelegramLiveScannerService } from './telegram-live-scanner.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([ArbitragePosition]),
@@ -21,6 +22,7 @@ import { ArbitragePosition } from '../positions/entities/arbitrage-position.enti
   providers: [
     TelegramService,
     TelegramCommandsService,
+    TelegramLiveScannerService
   ],
   exports: [TelegramService],
 })

@@ -13,6 +13,7 @@ import {
   ArbitragePosition,
   ArbitragePositionStatus,
 } from '../positions/entities/arbitrage-position.entity';
+import { EXCHANGE_SLUGS } from './telegram.constants';
 
 const ACTIVE_STATUSES = [
   ArbitragePositionStatus.OPEN,
@@ -21,12 +22,7 @@ const ACTIVE_STATUSES = [
   ArbitragePositionStatus.NEEDS_MANUAL_REVIEW,
 ];
 
-const EXCHANGE_SLUGS = [
-  'binance',
-  'bybit',
-  'okx',
-  'hyperliquid',
-];
+
 
 @Injectable()
 export class TelegramCommandsService {
@@ -96,53 +92,57 @@ export class TelegramCommandsService {
       await this.reply(ctx, await this.getTestText());
     });
 
-   bot.command('test', async (ctx) => {
-  const topics = [
-    { name: 'Scanner', id: 1681 },
-    { name: 'Reports', id: 1682 },
-    { name: 'Positions', id: 1683 },
-    { name: 'Alerts', id: 1684 },
-    { name: 'Status', id: 1685 },
-  ];
+   bot.command('testpanels', async (ctx) => {
+    const chatId = -1003325556701;
 
-  const chatId = -1003325556701;
+    const topics = [
+      { name: 'Scanner', id: 1681 },
+      { name: 'Reports', id: 1682 },
+      { name: 'Positions', id: 1683 },
+      { name: 'Alerts', id: 1684 },
+      { name: 'Status', id: 1685 },
+    ];
 
-  await ctx.reply('🧪 Starting Telegram panel tests...');
+    const results: string[] = [];
 
-  const results: string[] = [];
+    await ctx.reply('🧪 Starting Telegram panel tests...');
 
-  for (const topic of topics) {
-    try {
-      await ctx.telegram.sendMessage(
-        chatId,
-        [
+    for (const { name, id } of topics) {
+      try {
+        const message = [
           '🧪 <b>Telegram Test Message</b>',
           '',
-          `Panel: ${topic.name}`,
+          `Panel: ${name}`,
           'Status: 🟢 Connected',
           `Time: ${new Date().toISOString()}`,
-        ].join('\n'),
-        {
-          message_thread_id: topic.id,
+        ].join('\n');
+
+        await ctx.telegram.sendMessage(chatId, message, {
+          message_thread_id: id,
           parse_mode: 'HTML',
-        },
-      );
+        });
 
-      results.push(`🟢 ${topic.name}: SUCCESS`);
-    } catch (error) {
-      results.push(`🔴 ${topic.name}: FAILED`);
-      this.logger.error(
-        `Telegram test failed for ${topic.name}`,
-        error instanceof Error ? error.message : String(error),
-      );
+        results.push(`🟢 ${name}: SUCCESS`);
+      } catch (error) {
+        results.push(`🔴 ${name}: FAILED`);
+
+        this.logger.error(
+          `Telegram test failed for ${name}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
     }
-  }
 
-  await ctx.reply(
-    ['📋 <b>Telegram Panel Test Results</b>', '', ...results].join('\n'),
-    { parse_mode: 'HTML' },
-  );
+    const resultMessage = [
+      '📋 <b>Telegram Panel Test Results</b>',
+      '',
+      ...results,
+    ].join('\n');
+
+    await ctx.reply(resultMessage, {
+      parse_mode: 'HTML',
     });
+  });
 
     this.logger.log('Telegram commands registered.');
   }
