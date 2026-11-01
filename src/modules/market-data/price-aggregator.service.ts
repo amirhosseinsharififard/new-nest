@@ -117,13 +117,13 @@ export class PriceAggregatorService {
   const normalizedSymbol = this.normalizeSymbol(symbol);
 
   return Array.from(this.activeSubscriptions).some((key) => {
-    const prefix = `${normalizedExchange}:`;
-    if (!key.startsWith(prefix)) {
-      return false;
-    }
+  const prefix = `${normalizedExchange}:`;
+  if (!key.startsWith(prefix)) {
+    return false;
+  }
 
-    return key.endsWith(`:${normalizedSymbol}`);
-  });
+  return key.endsWith(`:${normalizedSymbol}`);
+});
   }
 
   private getSubscriptionKey(
@@ -134,6 +134,6 @@ export class PriceAggregatorService {
   }
 
   private normalizeSymbol(symbol: string): string {
-    return symbol.replace(/[\/_-]/g, '').toUpperCase();
+    return symbol.replace(/[/_-]/g, '').toUpperCase();
   }
 }

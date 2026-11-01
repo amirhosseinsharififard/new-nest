@@ -220,6 +220,10 @@ export class SpreadCalculatorService {
       };
     });
 
+    this.logger.log(
+  `Live market response: ${result.length} symbols`,
+);
+
     return {
       count: result.length,
       symbols: result,

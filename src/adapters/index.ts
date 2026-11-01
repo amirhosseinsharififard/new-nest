@@ -3,7 +3,7 @@ import { BinanceAdapter } from './binance/binance.adapter';
 import { BybitAdapter } from './bybit/bybit.adapter';
 import { OkxAdapter } from './okx/okx.adapter';
 import { HyperliquidAdapter } from './hyperliquid/hyperliquid.adapter';
-
+import { GateIoAdapter } from './gateio/gateio.adapter';
 /**
  * تنها جایی که هنگام افزودن صرافی جدید باید ویرایش بشه.
  * خود Core Engine و ArbitrageEngine هیچ وابستگی به این فایل ندارن.
@@ -30,9 +30,15 @@ export function registerAllAdapters(registry: ExchangeRegistry): void {
     (config: ExchangeAccountConfig) => new OkxAdapter(config),
   );
 
+  registry.register(
+    'gateio',
+    (config: ExchangeAccountConfig) => new GateIoAdapter(config),
+  );
+  
   // --- DEX (Decentralized Exchanges - Perpetual) ---
   registry.register(
     'hyperliquid',
     (config: ExchangeAccountConfig) => new HyperliquidAdapter(config),
   );
+
 }

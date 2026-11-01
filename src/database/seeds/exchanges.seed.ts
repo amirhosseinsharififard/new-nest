@@ -43,6 +43,13 @@ const EXCHANGES_SEED = [
     restBaseUrl: 'https://api.hyperliquid.xyz',
     wsBaseUrl: 'wss://api.hyperliquid.xyz/ws',
   },
+  {
+  slug: 'gateio',
+  displayName: 'Gate.io',
+  marketType: ExchangeMarketType.FUTURES,
+  restBaseUrl: 'https://api.gateio.ws/api/v4',
+  wsBaseUrl: 'wss://fx-ws.gateio.ws/v4/ws/usdt',
+},
   // برای افزودن صرافی بعدی، فقط یک آیتم دیگه اینجا اضافه کنید:
   // {
   //   slug: 'dydx',

@@ -9,15 +9,19 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { Exchange } from '../exchanges/entities/exchange.entity';
+
 import {
   ExchangeAccountConfig,
   ExchangeRegistry,
 } from '../../core/exchange/exchange-registry';
+
 import { PriceAggregatorService } from './price-aggregator.service';
 
 interface ExchangeMarket {
   config: ExchangeAccountConfig;
-  symbols: Set<string>;
+
+  // Normalized symbol => Original exchange symbol
+  symbols: Map<string, string>;
 }
 
 @Injectable()
@@ -28,9 +32,15 @@ export class MarketDataSubscriptionService
     MarketDataSubscriptionService.name,
   );
 
+  // Exchange => Normalized symbol => Original symbol
   private readonly subscribedSymbols = new Map<
     string,
-    Set<string>
+    Map<string, string>
+  >();
+
+  private readonly subscribedConfigs = new Map<
+    string,
+    ExchangeAccountConfig
   >();
 
   private refreshTimer?: NodeJS.Timeout;
@@ -54,7 +64,9 @@ export class MarketDataSubscriptionService
     }, this.refreshIntervalMs);
 
     this.logger.log(
-      `Market refresh scheduled every ${this.refreshIntervalMs / 60000} minutes`,
+      `Market refresh scheduled every ${
+        this.refreshIntervalMs / 60000
+      } minutes`,
     );
   }
 
@@ -93,11 +105,13 @@ export class MarketDataSubscriptionService
         where: { isActive: true },
       });
 
+      const activeExchangeSlugs = new Set(
+        exchanges.map((exchange) => exchange.slug),
+      );
+
       const discovered = new Map<string, ExchangeMarket>();
 
-      let discoveryFailed = false;
-
-      // 1. دریافت بازارهای تمام صرافی‌ها
+      // 1. Discover markets from every active exchange
       for (const exchange of exchanges) {
         const config: ExchangeAccountConfig = {
           accountId: `public-market-data:${exchange.slug}`,
@@ -107,67 +121,109 @@ export class MarketDataSubscriptionService
         };
 
         try {
-          const adapter = this.exchangeRegistry.getInstance(config);
+          const adapter =
+            this.exchangeRegistry.getInstance(config);
 
           if (!adapter.getMarketSymbols) {
-            throw new Error('getMarketSymbols() is not implemented');
+            throw new Error(
+              'getMarketSymbols() is not implemented',
+            );
           }
 
           const symbols = await adapter.getMarketSymbols();
 
           if (!symbols.length) {
-            throw new Error('Empty market symbols response');
+            throw new Error(
+              'Empty market symbols response',
+            );
+          }
+
+          const normalizedSymbols = new Map<string, string>();
+
+          for (const originalSymbol of symbols) {
+            const normalizedSymbol =
+              this.normalizeSymbol(originalSymbol);
+
+            if (!normalizedSymbol) continue;
+
+            normalizedSymbols.set(
+              normalizedSymbol,
+              originalSymbol,
+            );
           }
 
           discovered.set(exchange.slug, {
             config,
-            symbols: new Set(
-              symbols.map((symbol) => this.normalizeSymbol(symbol)),
-            ),
+            symbols: normalizedSymbols,
           });
 
           this.logger.log(
-            `${exchange.slug}: discovered ${symbols.length} markets`,
+            `${exchange.slug}: discovered ${normalizedSymbols.size} markets`,
           );
         } catch (error) {
-          discoveryFailed = true;
-
           this.logger.error(
             `${exchange.slug}: discovery failed: ${
-              error instanceof Error ? error.message : String(error)
+              error instanceof Error
+                ? error.message
+                : String(error)
             }`,
           );
         }
       }
 
-      // محافظه‌کارانه: در صورت خطای حتی یک صرافی،
-      // هیچ تغییری در اشتراک‌های فعلی ایجاد نکن.
-      if (discoveryFailed) {
+      // 2. Remove subscriptions for exchanges no longer active
+      for (const [exchangeSlug, currentSymbols] of this.subscribedSymbols) {
+        if (activeExchangeSlugs.has(exchangeSlug)) {
+          continue;
+        }
+
+        const config =
+          this.subscribedConfigs.get(exchangeSlug);
+
+        if (config && currentSymbols.size) {
+          this.priceAggregatorService.unwatchSymbols(
+            config,
+            [...currentSymbols.values()],
+          );
+        }
+
+        this.subscribedSymbols.delete(exchangeSlug);
+        this.subscribedConfigs.delete(exchangeSlug);
+
+        this.logger.log(
+          `${exchangeSlug}: removed inactive exchange subscriptions`,
+        );
+      }
+
+      if (discovered.size < 2) {
         this.logger.warn(
-          'Discovery incomplete. Keeping all existing subscriptions unchanged.',
+          'Not enough exchanges for common market discovery',
         );
         return;
       }
 
-      if (discovered.size < 2) {
-        this.logger.warn('Not enough exchanges for common market discovery');
-        return;
-      }
-
-      // 2. پیدا کردن نمادهایی که حداقل در دو صرافی وجود دارند
-      const symbolExchanges = new Map<string, string[]>();
+      // 3. Count how many exchanges contain each normalized symbol
+      const symbolExchanges = new Map<string, Set<string>>();
 
       for (const [exchangeSlug, market] of discovered) {
-        for (const symbol of market.symbols) {
-          const exchangeList = symbolExchanges.get(symbol) ?? [];
-          exchangeList.push(exchangeSlug);
-          symbolExchanges.set(symbol, exchangeList);
+        for (const normalizedSymbol of market.symbols.keys()) {
+          const exchangeSet =
+            symbolExchanges.get(normalizedSymbol) ??
+            new Set<string>();
+
+          exchangeSet.add(exchangeSlug);
+
+          symbolExchanges.set(
+            normalizedSymbol,
+            exchangeSet,
+          );
         }
       }
 
+      // 4. Keep only symbols available on at least two exchanges
       const commonSymbols = new Set(
         [...symbolExchanges.entries()]
-          .filter(([, exchangeList]) => exchangeList.length >= 2)
+          .filter(([, exchangeSet]) => exchangeSet.size >= 2)
           .map(([symbol]) => symbol),
       );
 
@@ -175,50 +231,94 @@ export class MarketDataSubscriptionService
         `Found ${commonSymbols.size} common markets across exchanges`,
       );
 
-      // 3. ساخت لیست اشتراک موردنیاز برای هر صرافی
+      // 5. Reconcile subscriptions for every successfully discovered exchange
       for (const [exchangeSlug, market] of discovered) {
-        const desiredSymbols = new Set(
-          [...market.symbols].filter((symbol) =>
-            commonSymbols.has(symbol),
-          ),
-        );
+        const desiredSymbols = new Map<string, string>();
+
+        for (const normalizedSymbol of commonSymbols) {
+          const originalSymbol =
+            market.symbols.get(normalizedSymbol);
+
+          if (originalSymbol) {
+            desiredSymbols.set(
+              normalizedSymbol,
+              originalSymbol,
+            );
+          }
+        }
 
         const currentSymbols =
-          this.subscribedSymbols.get(exchangeSlug) ?? new Set<string>();
+          this.subscribedSymbols.get(exchangeSlug) ??
+          new Map<string, string>();
 
-        const toSubscribe = [...desiredSymbols].filter(
-          (symbol) => !currentSymbols.has(symbol),
+        // Symbols that are no longer common
+        const toUnsubscribe = [
+          ...currentSymbols.entries(),
+        ].filter(
+          ([normalizedSymbol]) =>
+            !desiredSymbols.has(normalizedSymbol),
         );
 
-        const toUnsubscribe = [...currentSymbols].filter(
-          (symbol) => !desiredSymbols.has(symbol),
+        // Newly common symbols
+        const toSubscribe = [
+          ...desiredSymbols.entries(),
+        ].filter(
+          ([normalizedSymbol]) =>
+            !currentSymbols.has(normalizedSymbol),
         );
 
-        // 4. لغو اشتراک نمادهای دیگر
+        // 6. Unsubscribe obsolete symbols using original exchange names
         if (toUnsubscribe.length) {
+          const originalSymbols = toUnsubscribe.map(
+            ([, originalSymbol]) => originalSymbol,
+          );
+
           this.priceAggregatorService.unwatchSymbols(
             market.config,
-            toUnsubscribe,
+            originalSymbols,
           );
 
-          for (const symbol of toUnsubscribe) {
-            currentSymbols.delete(symbol);
+          for (const [normalizedSymbol] of toUnsubscribe) {
+            currentSymbols.delete(normalizedSymbol);
           }
+
+          this.logger.log(
+            `${exchangeSlug}: unsubscribed ${originalSymbols.length} obsolete symbols`,
+          );
         }
 
-        // 5. اشتراک نمادهای مشترک جدید
+        // 7. Subscribe newly common symbols
         if (toSubscribe.length) {
+          const originalSymbols = toSubscribe.map(
+            ([, originalSymbol]) => originalSymbol,
+          );
+
           this.priceAggregatorService.watchSymbols(
             market.config,
-            toSubscribe,
+            originalSymbols,
           );
 
-          for (const symbol of toSubscribe) {
-            currentSymbols.add(symbol);
+          for (const [normalizedSymbol, originalSymbol] of toSubscribe) {
+            currentSymbols.set(
+              normalizedSymbol,
+              originalSymbol,
+            );
           }
+
+          this.logger.log(
+            `${exchangeSlug}: subscribed ${originalSymbols.length} new common symbols`,
+          );
         }
 
-        this.subscribedSymbols.set(exchangeSlug, currentSymbols);
+        this.subscribedSymbols.set(
+          exchangeSlug,
+          currentSymbols,
+        );
+
+        this.subscribedConfigs.set(
+          exchangeSlug,
+          market.config,
+        );
 
         this.logger.log(
           `${exchangeSlug}: +${toSubscribe.length} / -${toUnsubscribe.length} / active ${currentSymbols.size}`,
@@ -227,7 +327,9 @@ export class MarketDataSubscriptionService
     } catch (error) {
       this.logger.error(
         `Market refresh failed: ${
-          error instanceof Error ? error.message : String(error)
+          error instanceof Error
+            ? error.message
+            : String(error)
         }`,
       );
     } finally {
@@ -236,6 +338,8 @@ export class MarketDataSubscriptionService
   }
 
   private normalizeSymbol(symbol: string): string {
-    return symbol.replace(/[\/_-]/g, '').toUpperCase();
+    return symbol
+      .replace(/[/_-]/g, '')
+      .toUpperCase();
   }
 }
