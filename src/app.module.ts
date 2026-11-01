@@ -34,6 +34,7 @@ import { HealthModule } from './modules/health/health.module';
 import { MarketPriceHistory } from './modules/market-data/entities/market-price-history.entity';
 import { SpreadAnalyticsModule } from
   './modules/spread-analytics/spread-analytics.module';
+import { TelegramModule } from './modules/telegram/telegram.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { SpreadAnalyticsModule } from
     HealthModule,
     AuthModule,
     ExchangesModule,
+    TelegramModule,
     ExchangeAccountsModule,
     BalancesModule,
     StrategiesModule,

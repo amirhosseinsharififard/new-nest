@@ -1,7 +1,7 @@
 
 const readline = require('readline');
 
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = 'http://localhost:4000';
 const API_PATH = '/market/live/all';
 const REFRESH_MS = 1000;
 

@@ -1,5 +1,5 @@
 const url =
-  'http://localhost:3000/spread-analytics?symbol=BTCUSDT&maxQuoteAgeMs=10000';
+  'http://localhost:4000/spread-analytics?symbol=BTCUSDT&maxQuoteAgeMs=10000';
 
 async function main() {
   try {

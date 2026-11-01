@@ -19,6 +19,8 @@ async function bootstrap() {
   const port = process.env.PORT || 3000;
   await app.listen(port);
   Logger.log(`🚀 Application در حال اجرا روی پورت ${port}`, 'Bootstrap');
+
+  app.enableShutdownHooks();
 }
 
 bootstrap();
