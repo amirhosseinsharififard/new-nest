@@ -1,25 +1,54 @@
-import { OrderStatus, PositionSide } from '../../core/exchange/exchange.types';
+
 import {
   fromBinanceSymbol,
   mapBinanceOrderStatus,
   mapBinancePositionSide,
   toBinanceSymbol,
 } from './binance.mapper';
+import { OrderStatus, PositionSide } from '../../core/exchange/exchange.types';
 
-
-describe('Binance Mapper', () => {
-  describe('toBinanceSymbol / fromBinanceSymbol', () => {
-    it('باید نماد داخلی را به فرمت Binance تبدیل کند', () => {
+describe('BinanceMapper', () => {
+  describe('toBinanceSymbol', () => {
+    it('should convert internal symbols to Binance format', () => {
       expect(toBinanceSymbol('BTC-USDT')).toBe('BTCUSDT');
     });
 
-    it('باید فرمت Binance را به نماد داخلی برگرداند', () => {
+    it('should convert lowercase symbols to uppercase', () => {
+      expect(toBinanceSymbol('btc-usdt')).toBe('BTCUSDT');
+    });
+
+    it('should support symbols without separators', () => {
+      expect(toBinanceSymbol('BTCUSDT')).toBe('BTCUSDT');
+    });
+
+    it('should remove only the first hyphen', () => {
+      expect(toBinanceSymbol('BTC-USDT-PERP')).toBe('BTCUSDT-PERP');
+    });
+
+    it('should handle empty strings', () => {
+      expect(toBinanceSymbol('')).toBe('');
+    });
+  });
+
+  describe('fromBinanceSymbol', () => {
+    it('should convert USDT symbols to internal format', () => {
       expect(fromBinanceSymbol('BTCUSDT')).toBe('BTC-USDT');
     });
 
-    it('رفت‌وبرگشت باید نتیجه یکسان بدهد', () => {
-      const original = 'ETH-USDT';
-      expect(fromBinanceSymbol(toBinanceSymbol(original))).toBe(original);
+    it('should support custom quote assets', () => {
+      expect(fromBinanceSymbol('ETHBTC', 'BTC')).toBe('ETH-BTC');
+    });
+
+    it('should return the original symbol when quote asset does not match', () => {
+      expect(fromBinanceSymbol('BTCUSDC')).toBe('BTCUSDC');
+    });
+
+    it('should handle symbols equal to the quote asset', () => {
+      expect(fromBinanceSymbol('USDT')).toBe('-USDT');
+    });
+
+    it('should handle empty symbols', () => {
+      expect(fromBinanceSymbol('')).toBe('');
     });
   });
 
@@ -31,23 +60,36 @@ describe('Binance Mapper', () => {
       ['CANCELED', OrderStatus.CANCELLED],
       ['EXPIRED', OrderStatus.CANCELLED],
       ['REJECTED', OrderStatus.FAILED],
-      ['SOME_UNKNOWN_STATUS', OrderStatus.UNKNOWN],
-    ])('باید وضعیت "%s" را به %s تبدیل کند', (input, expected) => {
+    ])('should map Binance status %s correctly', (input, expected) => {
       expect(mapBinanceOrderStatus(input)).toBe(expected);
+    });
+
+    it.each([
+      'PENDING',
+      'UNKNOWN_STATUS',
+      '',
+      'new',
+      'PARTIALLY_CANCELLED',
+    ])('should return UNKNOWN for unsupported status: %s', (status) => {
+      expect(mapBinanceOrderStatus(status)).toBe(OrderStatus.UNKNOWN);
     });
   });
 
   describe('mapBinancePositionSide', () => {
-    it('باید مقدار مثبت را LONG تشخیص دهد', () => {
-      expect(mapBinancePositionSide(0.5)).toBe(PositionSide.LONG);
+    it('should return LONG for positive position amounts', () => {
+      expect(mapBinancePositionSide(1)).toBe(PositionSide.LONG);
     });
 
-    it('باید مقدار منفی را SHORT تشخیص دهد', () => {
-      expect(mapBinancePositionSide(-0.5)).toBe(PositionSide.SHORT);
+    it('should return SHORT for negative position amounts', () => {
+      expect(mapBinancePositionSide(-1)).toBe(PositionSide.SHORT);
     });
 
-    it('باید صفر را LONG در نظر بگیرد (بدون پوزیشن باز)', () => {
+    it('should return LONG for zero position amounts', () => {
       expect(mapBinancePositionSide(0)).toBe(PositionSide.LONG);
+    });
+
+    it('should handle fractional position amounts', () => {
+      expect(mapBinancePositionSide(-0.001)).toBe(PositionSide.SHORT);
     });
   });
 });

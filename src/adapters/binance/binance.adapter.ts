@@ -19,6 +19,7 @@ import { BinanceRestClient } from './binance.rest';
 import { BinanceWsManager } from './binance.ws';
 import { mapBinanceOrderStatus, toBinanceSymbol } from './binance.mapper';
 
+
 /**
  * Adapter کامل Binance USDT-M Futures.
  *
@@ -70,51 +71,60 @@ export class BinanceAdapter implements IExchangeAdapter {
     return this.wsManager.isHealthy();
   }
 
-// --- متدهای تکی (حفظ شده برای سازگاری قبلی) ---
+  // --- Single methods (preserved for backward compatibility) ---
   subscribeTicker(
     symbol: string,
     cb: (data: TickerData) => void,
   ): void {
-    console.log('🔥🔥 ADAPTER subscribeTicker CALLED');
-    console.log('SYMBOL:', symbol);
+    this.logger.log(`Adapter subscribeTicker called: ${symbol}`);
 
-    // به جای صدا زدن متد قدیمی، متد Bulk را با یک آرایه تک عضوی صدا می‌زنیم
     this.wsManager
       .connectTickers([symbol], cb)
       .then(() => {
-        console.log('🔥🔥 ADAPTER connectTicker DONE');
+        this.logger.log(`Ticker subscription completed: ${symbol}`);
       })
-      .catch((err) => {
-        console.error('🔥🔥 ADAPTER connectTicker ERROR:', err);
+      .catch((err: unknown) => {
+        this.logger.error(
+          `Ticker subscription failed: ${symbol}`,
+          err instanceof Error ? err.stack : String(err),
+        );
       });
   }
 
-  unsubscribeTicker(symbol: string): void {
-    this.wsManager.disconnectTickers([symbol]).catch((err) => {
-      this.logger.error(`خطا در لغو اشتراک Ticker Stream: ${err.message}`);
-    });
-  }
+ unsubscribeTicker(symbol: string): void {
+  this.wsManager.disconnectTickers([symbol]).catch((err: unknown) => {
+    this.logger.error(
+      `Failed to unsubscribe ticker stream: ${symbol}`,
+      err instanceof Error ? err.stack : String(err),
+    );
+  });
+}
 
-  // --- متدهای گروهی (جدید - برای دریافت ۱۰۰ ارز همزمان) ---
-  subscribeTickers(
+ subscribeTickers(
     symbols: string[],
     cb: (data: TickerData) => void,
   ): void {
-    this.logger.log(`🔥🔥 ADAPTER subscribeTickers BATCH CALLED -> ${symbols.length} symbols`);
+    this.logger.log(`Batch ticker subscription started: ${symbols.length} symbols`);
 
     this.wsManager
       .connectTickers(symbols, cb)
       .then(() => {
-        this.logger.log(`🔥🔥 ADAPTER connectTickers BATCH DONE`);
+        this.logger.log('Batch ticker subscription completed');
       })
-      .catch((err) => {
-        this.logger.error(`🔥🔥 ADAPTER connectTickers BATCH ERROR:`, err);
+      .catch((err: unknown) => {
+        this.logger.error(
+          'Batch ticker subscription failed',
+          err instanceof Error ? err.stack : String(err),
+        );
       });
   }
 
   unsubscribeTickers(symbols: string[]): void {
-    this.wsManager.disconnectTickers(symbols).catch((err) => {
-      this.logger.error(`خطا در لغو اشتراک Batch Ticker Stream: ${err.message}`);
+    this.wsManager.disconnectTickers(symbols).catch((err: unknown) => {
+      this.logger.error(
+        'Failed to unsubscribe batch ticker stream',
+        err instanceof Error ? err.stack : String(err),
+      );
     });
   }
 
@@ -214,7 +224,7 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   async getPositionStatus(
-    accountId: string,
+    _accountId: string,
     symbol: string,
   ): Promise<PositionStatus> {
      if (!this.rest) {
@@ -248,7 +258,7 @@ export class BinanceAdapter implements IExchangeAdapter {
     };
   }
 
-  async getBalance(accountId: string): Promise<Balance[]> {
+  async getBalance(_accountId: string): Promise<Balance[]> {
      if (!this.rest) {
     throw new Error(
       'Binance trading requires API credentials',

@@ -69,7 +69,7 @@ export class SpreadCalculatorService {
 
     try {
       return JSON.parse(raw) as TickerData;
-    } catch (error) {
+    } catch  {
       this.logger.warn(`Invalid cached ticker JSON for ${key}`);
       return null;
     }
