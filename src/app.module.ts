@@ -31,6 +31,10 @@ import { ExchangeModule } from './core/exchange/exchange.module';
 import { RedisModule } from './common/redis/redis.module';
 import { HealthModule } from './modules/health/health.module';
 
+import { MarketPriceHistory } from './modules/market-data/entities/market-price-history.entity';
+import { SpreadAnalyticsModule } from
+  './modules/spread-analytics/spread-analytics.module';
+
 @Module({
   imports: [
     ScheduleModule.forRoot(),
@@ -48,13 +52,14 @@ import { HealthModule } from './modules/health/health.module';
       username: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
-      entities: [
+     entities: [
         User,
         Exchange,
         ExchangeAccount,
         Balance,
         ArbitrageStrategy,
         SymbolMapping,
+        MarketPriceHistory,
         ArbitrageOpportunity,
         ArbitragePosition,
         PositionLeg,
@@ -75,6 +80,7 @@ import { HealthModule } from './modules/health/health.module';
     BalancesModule,
     StrategiesModule,
     MarketDataModule,
+    SpreadAnalyticsModule,
     PositionsModule,
     OpportunitiesModule,
     RiskModule,
